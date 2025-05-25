@@ -8,37 +8,66 @@ require("dotenv").config();
 
 const router = express.Router();
 router.post("/signup", async (req, res) => {
-  try {
-    const { firstName, lastName, email, password } = req.body;
-
-    // 🔹 Check if email already exists
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ message: "Email already in use" });
+    try {
+      const {
+        firstName,
+        lastName,
+        username,
+        email,
+        password,
+        bio,
+        avatarUrl,
+      } = req.body;
+  
+      // 🔹 Check if email or username already exists
+      const existingUser = await User.findOne({
+        where: {
+          [Op.or]: [{ email }, { username }],
+        },
+      });
+  
+      if (existingUser) {
+        return res
+          .status(400)
+          .json({ message: "Email or username already in use" });
+      }
+  
+      // 🔹 Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+  
+      // 🔹 Assign "Member" role by default
+      const userRole = await Role.findOne({ where: { name: "Member" } });
+  
+      // 🔹 Create user
+      const newUser = await User.create({
+        firstName,
+        lastName,
+        username,
+        email,
+        password: hashedPassword,
+        bio,
+        avatarUrl,
+        roleId: userRole ? userRole.id : null,
+      });
+  
+      res.status(201).json({
+        message: "User registered successfully",
+        role: "Member",
+        user: {
+          id: newUser.id,
+          firstName,
+          lastName,
+          username,
+          email,
+          bio,
+          avatarUrl,
+        },
+      });
+    } catch (error) {
+      console.error("Signup Error:", error);
+      res.status(500).json({ message: "Internal server error" });
     }
-
-    // 🔹 Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // 🔹 Assign "Member" role by default
-    const userRole = await Role.findOne({ where: { name: "Member" } });
-
-    // 🔹 Create user
-    const newUser = await User.create({
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      roleId: userRole ? userRole.id : null,
-    });
-
-    res.status(201).json({ message: "User registered successfully", role: "Member" });
-
-  } catch (error) {
-    console.error("Signup Error:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
+  });
   router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;

@@ -22,6 +22,26 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
+      bio: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      avatarUrl: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        validate: {
+          isUrl: true,
+        },
+      },
+      username: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+        validate: {
+          len: [3, 25],
+          is: /^[a-zA-Z0-9_.-]*$/i, // optional: only allow letters, numbers, underscore, etc.
+        },
+      }
     });
   
     return User;

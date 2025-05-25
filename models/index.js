@@ -23,8 +23,11 @@ db.Sequelize = Sequelize;
 // Import Models
 db.Role = require("./role")(sequelize, DataTypes);
 db.User = require("./user")(sequelize, DataTypes);
+db.Profile = require("./profile")(sequelize, DataTypes);
 db.Role.hasMany(db.User, { foreignKey: "roleId", as: "users" });
 db.User.belongsTo(db.Role, { foreignKey: "roleId", as: "role" });
+db.User.hasOne(db.Profile, { foreignKey: "userId", as: "profile" });
+db.Profile.belongsTo(db.User, { foreignKey: "userId", as: "user" });
 
 
 sequelize
