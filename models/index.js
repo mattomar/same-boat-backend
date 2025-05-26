@@ -24,15 +24,19 @@ db.Sequelize = Sequelize;
 db.Role = require("./role")(sequelize, DataTypes);
 db.User = require("./user")(sequelize, DataTypes);
 db.Profile = require("./profile")(sequelize, DataTypes);
+db.Category = require("./category")(sequelize, DataTypes);
+db.Post = require("./post")(sequelize, DataTypes);
+
+
 db.Role.hasMany(db.User, { foreignKey: "roleId", as: "users" });
 db.User.belongsTo(db.Role, { foreignKey: "roleId", as: "role" });
 db.User.hasOne(db.Profile, { foreignKey: "userId", as: "profile" });
 db.Profile.belongsTo(db.User, { foreignKey: "userId", as: "user" });
+db.User.hasMany(db.Post, { foreignKey: "userId", as: "posts" });
+db.Post.belongsTo(db.User, { foreignKey: "userId", as: "user" });
 
+db.Category.hasMany(db.Post, { foreignKey: "categoryId", as: "posts" });
+db.Post.belongsTo(db.Category, { foreignKey: "categoryId", as: "category" });
 
-sequelize
-  .sync({ alter: true })
-  .then(() => console.log("✅ Database synced"))
-  .catch((err) => console.log("❌ Error syncing database:", err));
 
 module.exports = db;

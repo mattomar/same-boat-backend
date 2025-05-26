@@ -2,7 +2,6 @@ require("dotenv").config();
 
 const { Sequelize } = require("sequelize");
 
-console.log("DB_PASSWORD from env:", JSON.stringify(process.env.DB_PASSWORD));
 
 
 const sequelize = new Sequelize(
