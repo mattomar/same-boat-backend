@@ -59,7 +59,7 @@ if (process.env.NODE_ENV !== "test") {
       await db.Category.findOrCreate({ where: { name } });
     }
 
-    server.listen(3008, () => {
+    server.listen(3005, () => {
       console.log("🚀 Server running on http://localhost:3004");
     });
   }).catch((err) => {

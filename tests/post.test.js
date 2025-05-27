@@ -95,5 +95,69 @@ describe("Post creation and category filtering", () => {
     expect(res.body.some(post => post.title === "My Favorite Book")).toBe(true);
     expect(res.body.some(post => post.user.username === "janedoe")).toBe(true);
   });
+  let commentId;
+let replyId;
+
+
+
+
+  test("should allow a user to comment on a post", async () => {
+    const post = await request(app).get(`/posts/category/${category.id}`);
+    const postId = post.body[0].id;
+  
+    const res = await request(app)
+      .post(`/posts/${postId}/comments`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ content: "This is a comment." });
+  
+    expect(res.statusCode).toBe(201);
+    expect(res.body.content).toBe("This is a comment.");
+    commentId = res.body.id;
+  });
+  
+  test("should allow a user to reply to a comment", async () => {
+    const post = await request(app).get(`/posts/category/${category.id}`);
+    const postId = post.body[0].id;
+  
+    const res = await request(app)
+      .post(`/posts/${postId}/comments`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ content: "This is a reply.", parentId: commentId });
+  
+    expect(res.statusCode).toBe(201);
+    expect(res.body.content).toBe("This is a reply.");
+    expect(res.body.parentId).toBe(commentId);
+    replyId = res.body.id;
+  });
+  test("should fetch comments with replies for a post", async () => {
+    const post = await request(app).get(`/posts/category/${category.id}`);
+    const postId = post.body[0].id;
+  
+    const res = await request(app).get(`/posts/${postId}/comments`);
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    const comment = res.body.find(c => c.id === commentId);
+    expect(comment).toBeTruthy();
+    expect(comment.replies.length).toBeGreaterThan(0);
+  });
+  
+  test("should allow user to delete their reply", async () => {
+    const res = await request(app)
+      .delete(`/posts/comments/${replyId}`)
+      .set("Authorization", `Bearer ${token}`);
+    
+    expect(res.statusCode).toBe(200);
+    expect(res.body.message).toMatch(/deleted/i);
+  });
+  
+  test("should allow user to delete their comment", async () => {
+    const res = await request(app)
+      .delete(`/posts/comments/${commentId}`)
+      .set("Authorization", `Bearer ${token}`);
+    
+    expect(res.statusCode).toBe(200);
+    expect(res.body.message).toMatch(/deleted/i);
+  });
   
 });
+
