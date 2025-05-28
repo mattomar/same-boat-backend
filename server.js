@@ -9,6 +9,7 @@ const userRoutes = require("./routes/userRoutes");
 const authRoutes = require("./routes/authRoute");
 const profileRoutes = require("./routes/profileRoute");
 const setupMatching = require("./matchingLogic");
+const friendRequestRoutes = require("./routes/freindRequestRoute");
 const postRoutes = require("./routes/postRoute");
 const authenticateToken = require("./middlewares/auth");
 const db = require("./models"); // ✅ import models
@@ -27,7 +28,10 @@ app.use(express.json());
 app.use("/user", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/profile", profileRoutes);
+app.use("/friend-requests", friendRequestRoutes);
+
 app.use("/posts", postRoutes);
+
 
 app.get("/protected", authenticateToken, (req, res) => {
   res.json({ user: req.user });
@@ -59,8 +63,8 @@ if (process.env.NODE_ENV !== "test") {
       await db.Category.findOrCreate({ where: { name } });
     }
 
-    server.listen(3005, () => {
-      console.log("🚀 Server running on http://localhost:3004");
+    server.listen(3079, () => {
+      console.log("🚀 Server running on http://localhost:300");
     });
   }).catch((err) => {
     console.error("❌ Failed to sync DB:", err);
