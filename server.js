@@ -29,6 +29,8 @@ app.use("/user", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/profile", profileRoutes);
 app.use("/friend-requests", friendRequestRoutes);
+app.use("/uploads", express.static("uploads"));
+
 
 app.use("/posts", postRoutes);
 

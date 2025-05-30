@@ -30,7 +30,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
         validate: {
-          isUrl: true,
+          isValidUrl(value) {
+            if (value && !/^https?:\/\/.+/.test(value)) {
+              throw new Error("Invalid URL format");
+            }
+          },
         },
       },
       username: {
