@@ -1,6 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const { User, Role } = require("../models"); // Import your models
+const { User, Role, Profile } = require("../models"); // Import your models
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const multer = require("multer");
@@ -81,6 +81,13 @@ router.post("/signup", upload.single("avatar"), async (req, res) => {
       avatarUrl,
       roleId: userRole ? userRole.id : null,
     });
+
+    await Profile.create({
+      userId: newUser.id,
+      bio: bio || null,
+      avatarUrl: avatarUrl || null,
+    });
+    
 
     res.status(201).json({
       message: "User registered successfully",
