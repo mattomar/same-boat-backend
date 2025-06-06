@@ -6,14 +6,21 @@ const cloudinary = require("../config/cloudinary");
 const { Post, Category, User, Comment } = require("../models");
 const authenticateToken = require("../middlewares/auth");
 
-const upload = multer(); // memory storage
-
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB limit
+});
 const uploadToCloudinary = (buffer, resourceType) => {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       { resource_type: resourceType },
       (error, result) => {
-        if (error) return reject(error);
+        if (error) {
+          console.error(`❌ Cloudinary ${resourceType} upload error:`, error);
+          return reject(error);
+        }
+        console.log(`✅ Cloudinary ${resourceType} uploaded:`, result.secure_url);
         resolve(result.secure_url);
       }
     );
@@ -21,36 +28,35 @@ const uploadToCloudinary = (buffer, resourceType) => {
   });
 };
 
+
 // POST a new post
 router.post(
-  "/",
+  "/createPost",
+  (req, res, next) => {
+    console.log("📨 Hit /posts/createPost route");
+    next();
+  },
   authenticateToken,
-  upload.fields([
-    { name: "photo", maxCount: 1 },
-    { name: "video", maxCount: 1 },
-    { name: "audio", maxCount: 1 },
-  ]),
+  upload.single("photo"),  // Only handle image upload now
   async (req, res) => {
     try {
-      const { title, content, categoryId } = req.body;
+      console.log("🧠 req.user in /posts:", req.user); 
+      const { content, categoryId, gifUrl, youtubeUrl } = req.body;
       const userId = req.user.id;
 
       const category = await Category.findByPk(categoryId);
       if (!category) return res.status(400).json({ message: "Invalid category" });
 
-      const { photo, video, audio } = req.files || {};
-      const photoUrl = photo ? await uploadToCloudinary(photo[0].buffer, "image") : null;
-      const videoUrl = video ? await uploadToCloudinary(video[0].buffer, "video") : null;
-      const audioUrl = audio ? await uploadToCloudinary(audio[0].buffer, "video") : null;
+      const { photo } = req.file || {}; // Only handling photo upload
+      const photoUrl = photo ? await uploadToCloudinary(photo.buffer, "image") : null;
 
       const post = await Post.create({
-        title,
         content,
         categoryId,
         userId,
         photoUrl,
-        videoUrl,
-        audioUrl,
+        gifUrl,  // Store the GIF URL
+        youtubeUrl,  // Store the YouTube URL
       });
 
       res.status(201).json(post);
@@ -60,6 +66,7 @@ router.post(
     }
   }
 );
+
 
 // GET posts by category
 router.get("/category/:categoryId", async (req, res) => {
@@ -77,6 +84,15 @@ router.get("/category/:categoryId", async (req, res) => {
   }
 });
 
+router.get("/categories", async (req, res) => {
+  try {
+    const categories = await Category.findAll();
+    res.status(200).json(categories);
+  } catch (error) {
+    console.error("Fetch categories error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 // POST a comment (or reply)
 router.post("/:postId/comments", authenticateToken, async (req, res) => {
   try {
@@ -163,6 +179,10 @@ router.delete("/comments/:commentId", authenticateToken, async (req, res) => {
     console.error("Delete comment error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
+});
+
+router.get("/test", (req, res) => {
+  res.send("✅ Post route works");
 });
 
 module.exports = router;

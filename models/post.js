@@ -1,25 +1,21 @@
 module.exports = (sequelize, DataTypes) => {
   const Post = sequelize.define("Post", {
-    title: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
     content: {
       type: DataTypes.TEXT,
       allowNull: false,
     },
-    // Optional media fields:
+    // Media fields
     photoUrl: {
       type: DataTypes.STRING,
       allowNull: true,  // optional
     },
-    videoUrl: {
+    gifUrl: {  // New field for storing GIF URLs
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: true,  // optional
     },
-    audioUrl: {
+    youtubeUrl: {  // New field for storing YouTube URLs
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: true,  // optional
     },
   });
 

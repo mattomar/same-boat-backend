@@ -11,6 +11,7 @@ const profileRoutes = require("./routes/profileRoute");
 const setupMatching = require("./matchingLogic");
 const friendRequestRoutes = require("./routes/freindRequestRoute");
 const postRoutes = require("./routes/postRoute");
+const gitRoutes = require("./routes/gifRoute");
 const authenticateToken = require("./middlewares/auth");
 const db = require("./models"); // ✅ import models
 
@@ -31,6 +32,8 @@ app.use("/user", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/profile", profileRoutes);
 app.use("/friend-requests", friendRequestRoutes);
+app.use("/gifs", gitRoutes);
+
 app.use("/uploads", express.static("uploads"));
 
 

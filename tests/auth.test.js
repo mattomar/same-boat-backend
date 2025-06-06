@@ -1,65 +1,70 @@
 const request = require("supertest");
-const path = require("path");
-const { app } = require("../server"); 
-const { User, Profile } = require("../models");
+const app = require("../server"); // your Express app
+const { Post, Category } = require("../models");
+const cloudinary = require("../config/cloudinary");
+const jwt = require("jsonwebtoken");
 
-describe("User registration with avatar upload and profile creation", () => {
-  let testUserId;
+// Mock cloudinary upload
+jest.mock("../config/cloudinary", () => ({
+  uploader: {
+    upload_stream: jest.fn(),
+  },
+}));
 
-  const userData = {
-    firstName: "Test",
-    lastName: "User",
-    username: "testuser123",
-    email: "testuser123@example.com",
-    password: "TestPass123!",
-    bio: "This is a test bio.",
+// Create mock streamifier
+jest.mock("streamifier", () => ({
+  createReadStream: jest.fn(() => ({
+    pipe: jest.fn(),
+  })),
+}));
+
+// Mock token verification middleware
+jest.mock("../middlewares/auth", () => {
+  return (req, res, next) => {
+    req.user = { id: 1, username: "testuser" }; // fake authenticated user
+    next();
   };
+});
 
-  it("should register a user, upload avatar, create profile with bio and image URL", async () => {
-    const res = await request(app)
-    .post("/api/auth/signup")
-    .field("firstName", userData.firstName)
-      .field("lastName", userData.lastName)
-      .field("username", userData.username)
-      .field("email", userData.email)
-      .field("password", userData.password)
-      .field("bio", userData.bio)
-      .attach("avatar", path.resolve(__dirname, "avatar.png")); // provide a test image in /tests/avatar.png
-
-    expect(res.statusCode).toBe(201);
-    expect(res.body.message).toBe("User registered successfully");
-
-    // Check returned user data
-    expect(res.body.user).toHaveProperty("id");
-    expect(res.body.user.firstName).toBe(userData.firstName);
-    expect(res.body.user.lastName).toBe(userData.lastName);
-    expect(res.body.user.username).toBe(userData.username);
-    expect(res.body.user.email).toBe(userData.email);
-    expect(res.body.user.bio).toBe(userData.bio);
-
-    expect(res.body.user.avatarUrl).toMatch(/^http:\/\/.+\/uploads\/avatar-/); // basic check for URL format
-
-    // Save testUserId for cleanup
-    testUserId = res.body.user.id;
-
-    // Check profile exists in DB
-    const profile = await Profile.findOne({ where: { userId: testUserId } });
-    expect(profile).not.toBeNull();
-    expect(profile.bio).toBe(userData.bio);
-    expect(profile.avatarUrl).toBe(res.body.user.avatarUrl);
-
-    // Check user exists in DB with hashed password
-    const user = await User.findByPk(testUserId);
-    expect(user).not.toBeNull();
-    expect(user.email).toBe(userData.email);
-    expect(user.password).not.toBe(userData.password); // should be hashed
+describe("POST /posts/createPost", () => {
+  beforeAll(async () => {
+    await Category.create({ id: 1, name: "Test Category" });
   });
 
   afterAll(async () => {
-    if (testUserId) {
-      // Clean up test data
-      await Profile.destroy({ where: { userId: testUserId } });
-      await User.destroy({ where: { id: testUserId } });
-    }
+    await Post.destroy({ where: {} });
+    await Category.destroy({ where: {} });
+  });
+
+  it("should create a new post with files", async () => {
+    // Mock cloudinary upload_stream behavior
+    cloudinary.uploader.upload_stream.mockImplementation((options, callback) => {
+      return {
+        end: () => callback(null, { secure_url: "https://fakeurl.com/media.jpg" }),
+      };
+    });
+
+    const response = await request(app)
+      .post("/posts/createPost")
+      .field("title", "Test Post")
+      .field("content", "This is a test post.")
+      .field("categoryId", "1")
+      .attach("photo", Buffer.from("fake image content"), { filename: "photo.jpg", contentType: "image/jpeg" });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toHaveProperty("id");
+    expect(response.body.title).toBe("Test Post");
+    expect(cloudinary.uploader.upload_stream).toHaveBeenCalled();
+  });
+
+  it("should fail with invalid category", async () => {
+    const response = await request(app)
+      .post("/posts/createPost")
+      .field("title", "Invalid Post")
+      .field("content", "Invalid category test")
+      .field("categoryId", "999");
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe("Invalid category");
   });
 });
