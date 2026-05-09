@@ -47,8 +47,10 @@ router.post(
       const category = await Category.findByPk(categoryId);
       if (!category) return res.status(400).json({ message: "Invalid category" });
 
-      const { photo } = req.file || {}; // Only handling photo upload
-      const photoUrl = photo ? await uploadToCloudinary(photo.buffer, "image") : null;
+     const photo = req.file;
+     const photoUrl = photo
+       ? await uploadToCloudinary(photo.buffer, "image")
+       : null;
 
       const post = await Post.create({
         content,
@@ -59,8 +61,19 @@ router.post(
         youtubeUrl,  // Store the YouTube URL
       });
 
-      res.status(201).json(post);
-    } catch (error) {
+const createdPost = await Post.findByPk(post.id, {
+  include: [
+    {
+      model: User,
+      as: "user",
+      attributes: ["id", "username"],
+    },
+  ],
+});
+
+res.status(201).json(createdPost);
+
+} catch (error) {
       console.error("Create post error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
@@ -184,5 +197,8 @@ router.delete("/comments/:commentId", authenticateToken, async (req, res) => {
 router.get("/test", (req, res) => {
   res.send("✅ Post route works");
 });
+
+
+
 
 module.exports = router;
