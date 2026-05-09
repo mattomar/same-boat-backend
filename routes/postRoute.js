@@ -84,12 +84,20 @@ res.status(201).json(createdPost);
 // GET posts by category
 router.get("/category/:categoryId", async (req, res) => {
   try {
-    const { categoryId } = req.params;
+    const categoryId = Number(req.params.categoryId);
+
     const posts = await Post.findAll({
       where: { categoryId },
-      include: [{ model: User, as: "user", attributes: ["id", "username"] }],
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "username"],
+        },
+      ],
       order: [["createdAt", "DESC"]],
     });
+
     res.json(posts);
   } catch (error) {
     console.error("Fetch posts error:", error);
