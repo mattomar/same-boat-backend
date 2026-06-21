@@ -17,13 +17,21 @@ router.post("/send/:receiverId", authenticateToken, async (req, res) => {
     return res.status(400).json({ message: "You can't send a request to yourself." });
   }
 
-  const existing = await FriendRequest.findOne({
-    where: {
-      senderId,
-      receiverId,
-    },
-    order: [["createdAt", "DESC"]],
-  });
+const existing = await FriendRequest.findOne({
+  where: {
+    [Op.or]: [
+      {
+        senderId,
+        receiverId,
+      },
+      {
+        senderId: receiverId,
+        receiverId: senderId,
+      },
+    ],
+  },
+  order: [["createdAt", "DESC"]],
+});
   
   if (existing && existing.status === "pending") {
     return res.status(400).json({ message: "Request already sent." });
