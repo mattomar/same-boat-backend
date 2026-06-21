@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const { FriendRequest, User } = require("../models");
 const authenticateToken = require("../middlewares/auth");
+const { Op } = require("sequelize");
+
 
 router.get("/ping", (req, res) => {
   res.send("Friend route active");
@@ -88,5 +90,67 @@ router.post("/decline/:requestId", authenticateToken, async (req, res) => {
 });
 
 
+router.get("/pending", authenticateToken, async (req, res) => {
+  const requests = await FriendRequest.findAll({
+    where: {
+      receiverId: req.user.id,
+      status: "pending",
+    },
+    include: [
+      {
+        model: User,
+        as: "sender",
+        attributes: ["id", "username"],
+      },
+    ],
+  });
+
+  res.json(requests);
+});
+
+router.delete("/:userId", authenticateToken, async (req, res) => {
+  const friendship = await FriendRequest.findOne({
+    where: {
+      status: "accepted",
+      [Op.or]: [
+        {
+          senderId: req.user.id,
+          receiverId: req.params.userId,
+        },
+        {
+          senderId: req.params.userId,
+          receiverId: req.user.id,
+        },
+      ],
+    },
+  });
+
+  if (!friendship) {
+    return res.status(404).json({
+      message: "Friend not found",
+    });
+  }
+
+  await friendship.destroy();
+
+  res.json({
+    message: "Friend removed",
+  });
+});
+
+router.get("/search", authenticateToken, async (req, res) => {
+  const { username } = req.query;
+
+  const users = await User.findAll({
+    where: {
+      username: {
+        [Op.like]: `%${username}%`,
+      },
+    },
+    attributes: ["id", "username"],
+  });
+
+  res.json(users);
+});
 
 module.exports = router;
