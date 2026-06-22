@@ -33,9 +33,6 @@ const existing = await FriendRequest.findOne({
   order: [["createdAt", "DESC"]],
 });
   
-  if (existing && existing.status === "pending") {
-    return res.status(400).json({ message: "Request already sent." });
-  }
 
   if (existing) {
     return res.status(400).json({ message: "Request already sent." });
@@ -149,13 +146,15 @@ router.delete("/:userId", authenticateToken, async (req, res) => {
 router.get("/search", authenticateToken, async (req, res) => {
   const { username } = req.query;
 
+if (!username || username.trim() === "") {
+  return res.json([]);
+}
   const users = await User.findAll({
     where: {
-      username: {
-        [Op.like]: `%${username}%`,
-      },
+      username: { [Op.like]: `%${username}%` },
+      id: { [Op.ne]: req.user.id },
     },
-    attributes: ["id", "username"],
+    limit: 10,
   });
 
   res.json(users);
