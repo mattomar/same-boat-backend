@@ -30,6 +30,7 @@ db.Category = require("./category")(sequelize, DataTypes);
 db.Post = require("./post")(sequelize, DataTypes);
 db.Comment = require("./comment")(sequelize, DataTypes);
 db.FriendRequest = require("./friendRequest")(sequelize, DataTypes);
+db.Notification = require("./notifs")(sequelize, DataTypes);
 
 // --- Define Associations ---
 
@@ -90,6 +91,18 @@ db.User.hasMany(db.FriendRequest, {
 db.User.hasMany(db.FriendRequest, {
   as: "receivedRequests",
   foreignKey: "receiverId",
+});
+
+// User <-> Notification
+db.User.hasMany(db.Notification, {
+  foreignKey: "userId",
+  as: "notifications",
+  onDelete: "CASCADE",
+});
+
+db.Notification.belongsTo(db.User, {
+  foreignKey: "userId",
+  as: "user",
 });
 
 module.exports = db;
