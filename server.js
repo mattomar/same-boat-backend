@@ -12,6 +12,7 @@ const setupMatching = require("./matchingLogic");
 const friendRequestRoutes = require("./routes/freindRequestRoute");
 const postRoutes = require("./routes/postRoute");
 const gitRoutes = require("./routes/gifRoute");
+const notificationRoutes = require ("./routes/notfisRoute");
 const authenticateToken = require("./middlewares/auth");
 const db = require("./models"); // ✅ import models
 
@@ -31,13 +32,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/user", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/profile", profileRoutes);
-app.use("/friend-requests", friendRequestRoutes);
+app.use("/api/friends", friendRequestRoutes);
 app.use("/gifs", gitRoutes);
 
 app.use("/uploads", express.static("uploads"));
 
 
 app.use("/posts", postRoutes);
+app.use("/notifications", notificationRoutes);
 
 
 app.get("/protected", authenticateToken, (req, res) => {
