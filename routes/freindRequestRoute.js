@@ -39,6 +39,13 @@ const existing = await FriendRequest.findOne({
   }
 
   await FriendRequest.create({ senderId, receiverId });
+  const { Notification } = require("../models");
+
+  await Notification.create({
+    userId: receiverId,
+    type: "friend_request",
+    message: "You received a friend request",
+  });
   res.json({ message: "Friend request sent." });
 });
 
@@ -53,6 +60,13 @@ router.post("/accept/:requestId", authenticateToken, async (req, res) => {
 
   request.status = "accepted";
   await request.save();
+  const { Notification } = require("../models");
+
+  await Notification.create({
+    userId: request.senderId,
+    type: "friend_accepted",
+    message: "Your friend request was accepted",
+  });
 
   res.json({ message: "Friend request accepted." });
 });
