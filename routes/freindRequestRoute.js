@@ -160,9 +160,26 @@ router.delete("/:userId", authenticateToken, async (req, res) => {
 router.get("/search", authenticateToken, async (req, res) => {
   const { username } = req.query;
 
-if (!username || username.trim() === "") {
-  return res.json([]);
-}
+  if (!username || username.trim() === "") {
+    return res.json([]);
+  }
+
+  // 1. get all related friend requests
+  const requests = await FriendRequest.findAll({
+    where: {
+      [Op.or]: [{ senderId: req.user.id }, { receiverId: req.user.id }],
+    },
+  });
+
+  const sent = new Set(
+    requests.filter((r) => r.senderId === req.user.id).map((r) => r.receiverId),
+  );
+
+  const received = new Set(
+    requests.filter((r) => r.receiverId === req.user.id).map((r) => r.senderId),
+  );
+
+  // 2. get users
   const users = await User.findAll({
     where: {
       username: { [Op.like]: `%${username}%` },
@@ -171,7 +188,21 @@ if (!username || username.trim() === "") {
     limit: 10,
   });
 
-  res.json(users);
+  // 3. attach status
+  const result = users.map((user) => {
+    let status = "none";
+
+    if (sent.has(user.id)) status = "pending_sent";
+    if (received.has(user.id)) status = "pending_received";
+
+    return {
+      id: user.id,
+      username: user.username,
+      status,
+    };
+  });
+
+  res.json(result);
 });
 
 module.exports = router;
