@@ -190,11 +190,20 @@ router.get("/search", authenticateToken, async (req, res) => {
 
   // 3. attach status
   const result = users.map((user) => {
-    let status = "none";
+let status = "none";
 
-    if (sent.has(user.id)) status = "pending_sent";
-    if (received.has(user.id)) status = "pending_received";
-
+if (sent.has(user.id)) status = "pending_sent";
+else if (received.has(user.id)) status = "pending_received";
+else if (
+  requests.some(
+    (r) =>
+      r.status === "accepted" &&
+      ((r.senderId === req.user.id && r.receiverId === user.id) ||
+        (r.receiverId === req.user.id && r.senderId === user.id)),
+  )
+) {
+  status = "friends";
+}
     return {
       id: user.id,
       username: user.username,
@@ -203,6 +212,34 @@ router.get("/search", authenticateToken, async (req, res) => {
   });
 
   res.json(result);
+});
+
+router.get("/status/:userId", authenticateToken, async (req, res) => {
+  const myId = req.user.id;
+  const otherId = parseInt(req.params.userId);
+
+  const request = await FriendRequest.findOne({
+    where: {
+      [Op.or]: [
+        { senderId: myId, receiverId: otherId },
+        { senderId: otherId, receiverId: myId },
+      ],
+    },
+  });
+
+  if (!request) {
+    return res.json({ status: "none" });
+  }
+
+  if (request.senderId === myId) {
+    return res.json({ status: "pending_sent" });
+  }
+
+  if (request.receiverId === myId) {
+    return res.json({ status: "pending_received" });
+  }
+
+  return res.json({ status: request.status }); // accepted/declined fallback
 });
 
 module.exports = router;
