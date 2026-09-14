@@ -34,16 +34,21 @@ router.post("/send/:receiverId", authenticateToken, async (req, res) => {
     return res.status(400).json({ message: "Request already sent." });
   }
 
-  await FriendRequest.create({ senderId, receiverId, status: "pending" });
+const friendRequest = await FriendRequest.create({
+  senderId,
+  receiverId,
+  status: "pending",
+});
 
-  const sender = await User.findByPk(senderId);
+const sender = await User.findByPk(senderId);
 
-  await Notification.create({
-    userId: receiverId,
-    senderId,
-    type: "friend_request",
-    message: `${sender.username} sent you a friend request`,
-  });
+await Notification.create({
+  userId: receiverId,
+  senderId,
+  type: "friend_request",
+  friendRequestId: friendRequest.id,
+  message: `${sender.username} sent you a friend request`,
+});
 
   res.json({ message: "Friend request sent." });
 });
@@ -69,12 +74,31 @@ router.post("/accept/:requestId", authenticateToken, async (req, res) => {
   }
 
   if (request.status !== "pending") {
-    return res.status(400).json({ message: "Already handled." });
+    return res.status(400).json({ message: "Request already handled." });
   }
 
   request.status = "accepted";
   await request.save();
 
+  // Update the original notification
+  const notification = await Notification.findOne({
+    where: {
+      friendRequestId: request.id,
+      userId: req.user.id,
+      type: "friend_request",
+    },
+  });
+
+  if (notification) {
+    notification.type = "friend_accepted";
+    notification.message = "Friend request accepted";
+    notification.handled = true;
+    notification.isRead = true;
+
+    await notification.save();
+  }
+
+  // Notify the person who sent the request
   await Notification.create({
     userId: request.senderId,
     senderId: req.user.id,
@@ -109,6 +133,24 @@ router.post("/decline/:requestId", authenticateToken, async (req, res) => {
 
   request.status = "declined";
   await request.save();
+
+  // Update the original notification
+  const notification = await Notification.findOne({
+    where: {
+      friendRequestId: request.id,
+      userId: req.user.id,
+      type: "friend_request",
+    },
+  });
+
+  if (notification) {
+    notification.type = "friend_declined";
+    notification.message = "Friend request declined";
+    notification.handled = true;
+    notification.isRead = true;
+
+    await notification.save();
+  }
 
   return res.json({
     message: "Friend request declined",
