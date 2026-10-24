@@ -39,7 +39,7 @@ app.use("/uploads", express.static("uploads"));
 
 
 app.use("/posts", postRoutes);
-app.use("/notifications", notificationRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 
 app.get("/protected", authenticateToken, (req, res) => {

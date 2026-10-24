@@ -14,6 +14,23 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       defaultValue: false,
     },
+    senderId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+
+    postId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    friendRequestId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    handled: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
   });
 
   return Notification;

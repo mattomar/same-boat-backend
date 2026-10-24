@@ -1,8 +1,7 @@
 const request = require("supertest");
-const app = require("../server"); // your Express app
+const { app } = require("../server"); // FIXED
 const { Post, Category } = require("../models");
 const cloudinary = require("../config/cloudinary");
-const jwt = require("jsonwebtoken");
 
 // Mock cloudinary upload
 jest.mock("../config/cloudinary", () => ({
@@ -11,24 +10,31 @@ jest.mock("../config/cloudinary", () => ({
   },
 }));
 
-// Create mock streamifier
+// Mock streamifier
 jest.mock("streamifier", () => ({
   createReadStream: jest.fn(() => ({
     pipe: jest.fn(),
   })),
 }));
 
-// Mock token verification middleware
+// Mock auth middleware (so no JWT needed)
 jest.mock("../middlewares/auth", () => {
   return (req, res, next) => {
-    req.user = { id: 1, username: "testuser" }; // fake authenticated user
+    req.user = { id: 1, username: "testuser" };
     next();
   };
 });
 
 describe("POST /posts/createPost", () => {
+  let category;
+
   beforeAll(async () => {
-    await Category.create({ id: 1, name: "Test Category" });
+    await Post.destroy({ where: {} });
+    await Category.destroy({ where: {} });
+
+    category = await Category.create({
+      name: "Test Category",
+    });
   });
 
   afterAll(async () => {
@@ -37,19 +43,26 @@ describe("POST /posts/createPost", () => {
   });
 
   it("should create a new post with files", async () => {
-    // Mock cloudinary upload_stream behavior
-    cloudinary.uploader.upload_stream.mockImplementation((options, callback) => {
-      return {
-        end: () => callback(null, { secure_url: "https://fakeurl.com/media.jpg" }),
-      };
-    });
+    cloudinary.uploader.upload_stream.mockImplementation(
+      (options, callback) => {
+        return {
+          end: () =>
+            callback(null, {
+              secure_url: "https://fakeurl.com/media.jpg",
+            }),
+        };
+      },
+    );
 
     const response = await request(app)
       .post("/posts/createPost")
       .field("title", "Test Post")
       .field("content", "This is a test post.")
-      .field("categoryId", "1")
-      .attach("photo", Buffer.from("fake image content"), { filename: "photo.jpg", contentType: "image/jpeg" });
+      .field("categoryId", category.id)
+      .attach("photo", Buffer.from("fake image"), {
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+      });
 
     expect(response.status).toBe(201);
     expect(response.body).toHaveProperty("id");
