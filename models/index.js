@@ -31,6 +31,7 @@ db.Post = require("./post")(sequelize, DataTypes);
 db.Comment = require("./comment")(sequelize, DataTypes);
 db.FriendRequest = require("./friendRequest")(sequelize, DataTypes);
 db.Notification = require("./notifs")(sequelize, DataTypes);
+require("./directMessaging")(db, sequelize, DataTypes);
 
 // --- Define Associations ---
 
