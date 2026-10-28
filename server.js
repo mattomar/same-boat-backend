@@ -12,7 +12,9 @@ const setupMatching = require("./matchingLogic");
 const friendRequestRoutes = require("./routes/freindRequestRoute");
 const postRoutes = require("./routes/postRoute");
 const gitRoutes = require("./routes/gifRoute");
-const notificationRoutes = require ("./routes/notfisRoute");
+const notificationRoutes = require("./routes/notfisRoute");
+const messageRoutes = require("./routes/messageRoute");
+const { setupDirectMessages } = require("./socket/dmSocket");
 const authenticateToken = require("./middlewares/auth");
 const db = require("./models"); // ✅ import models
 
@@ -20,10 +22,12 @@ const app = express();
 const server = http.createServer(app);
 
 // Middleware setup
-app.use(cors({
-  origin: "http://localhost:30056",
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: "http://localhost:30056",
+    credentials: true,
+  }),
+);
 
 app.use(sessionMiddleware);
 app.use(express.json());
@@ -37,10 +41,9 @@ app.use("/gifs", gitRoutes);
 
 app.use("/uploads", express.static("uploads"));
 
-
 app.use("/posts", postRoutes);
 app.use("/api/notifications", notificationRoutes);
-
+app.use("/api/messages", messageRoutes);
 
 app.get("/protected", authenticateToken, (req, res) => {
   res.json({ user: req.user });
@@ -60,22 +63,32 @@ io.use((socket, next) => {
 });
 
 setupMatching(io);
+setupDirectMessages(io);
 
 // Export app and server separately for testing
 module.exports = { app, server };
 
 // ✅ Sync and seed before starting server
 if (process.env.NODE_ENV !== "test") {
-  db.sequelize.sync({ alter: true }).then(async () => {
-    const categories = ["TV/Movies", "Books", "Brainrot", "General", "Cooking"];
-    for (const name of categories) {
-      await db.Category.findOrCreate({ where: { name } });
-    }
+  db.sequelize
+    .sync({ alter: true })
+    .then(async () => {
+      const categories = [
+        "TV/Movies",
+        "Books",
+        "Brainrot",
+        "General",
+        "Cooking",
+      ];
+      for (const name of categories) {
+        await db.Category.findOrCreate({ where: { name } });
+      }
 
-    server.listen(3079, () => {
-      console.log("🚀 Server running on http://localhost:300");
+      server.listen(3079, () => {
+        console.log("🚀 Server running on http://localhost:300");
+      });
+    })
+    .catch((err) => {
+      console.error("❌ Failed to sync DB:", err);
     });
-  }).catch((err) => {
-    console.error("❌ Failed to sync DB:", err);
-  });
 }
