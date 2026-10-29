@@ -80,6 +80,13 @@ router.post("/accept/:requestId", authenticateToken, async (req, res) => {
   request.status = "accepted";
   await request.save();
 
+  // Who sent the request? (so the receiver's notification can name them)
+  const requester = await User.findByPk(request.senderId, {
+    attributes: ["id", "username"],
+  });
+  const requesterName = requester ? requester.username : "this user";
+  const receiverMessage = `You accepted ${requesterName}'s friend request`;
+
   // Update the original notification
   const notification = await Notification.findOne({
     where: {
@@ -91,7 +98,7 @@ router.post("/accept/:requestId", authenticateToken, async (req, res) => {
 
   if (notification) {
     notification.type = "friend_accepted";
-    notification.message = "Friend request accepted";
+    notification.message = receiverMessage;
     notification.handled = true;
     notification.isRead = true;
 
@@ -108,6 +115,7 @@ router.post("/accept/:requestId", authenticateToken, async (req, res) => {
 
   return res.json({
     message: "Friend request accepted",
+    notificationMessage: receiverMessage,
     requestId: request.id,
     senderId: request.senderId,
   });
@@ -134,6 +142,12 @@ router.post("/decline/:requestId", authenticateToken, async (req, res) => {
   request.status = "declined";
   await request.save();
 
+  const requester = await User.findByPk(request.senderId, {
+    attributes: ["id", "username"],
+  });
+  const requesterName = requester ? requester.username : "this user";
+  const receiverMessage = `You declined ${requesterName}'s friend request`;
+
   // Update the original notification
   const notification = await Notification.findOne({
     where: {
@@ -145,7 +159,7 @@ router.post("/decline/:requestId", authenticateToken, async (req, res) => {
 
   if (notification) {
     notification.type = "friend_declined";
-    notification.message = "Friend request declined";
+    notification.message = receiverMessage;
     notification.handled = true;
     notification.isRead = true;
 
@@ -154,63 +168,10 @@ router.post("/decline/:requestId", authenticateToken, async (req, res) => {
 
   return res.json({
     message: "Friend request declined",
+    notificationMessage: receiverMessage,
     requestId: request.id,
   });
 });
-
-// ========================
-// GET FRIENDS
-// ========================
-router.get("/friends", authenticateToken, async (req, res) => {
-  const userId = req.user.id;
-
-  const sent = await FriendRequest.findAll({
-    where: { senderId: userId, status: "accepted" },
-    include: [{ model: User, as: "receiver", attributes: ["id", "username"] }],
-  });
-
-  const received = await FriendRequest.findAll({
-    where: { receiverId: userId, status: "accepted" },
-    include: [{ model: User, as: "sender", attributes: ["id", "username"] }],
-  });
-
-  const friends = [
-    ...sent.map((r) => r.receiver),
-    ...received.map((r) => r.sender),
-  ];
-
-  res.json(friends);
-});
-
-// ========================
-// REMOVE FRIEND
-// ========================
-router.delete("/:userId", authenticateToken, async (req, res) => {
-  const friendship = await FriendRequest.findOne({
-    where: {
-      status: "accepted",
-      [Op.or]: [
-        {
-          senderId: req.user.id,
-          receiverId: req.params.userId,
-        },
-        {
-          senderId: req.params.userId,
-          receiverId: req.user.id,
-        },
-      ],
-    },
-  });
-
-  if (!friendship) {
-    return res.status(404).json({ message: "Friend not found" });
-  }
-
-  await friendship.destroy();
-
-  res.json({ message: "Friend removed" });
-});
-
 // ========================
 // SEARCH USERS
 // ========================

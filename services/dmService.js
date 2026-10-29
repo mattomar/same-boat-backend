@@ -56,6 +56,7 @@ const toMessageJSON = (m) => ({
   senderId: m.senderId,
   text: m.text,
   createdAt: m.createdAt,
+  readAt: m.readAt,
 });
 
 const toRequestJSON = (r) => ({
@@ -76,6 +77,8 @@ const requireUser = async (id) => {
   if (!user) throw new HttpError(404, "User not found.");
   return user;
 };
+
+
 
 // Reuses the existing FriendRequest table: an "accepted" row in either direction.
 const areFriends = async (a, b) =>
@@ -206,11 +209,24 @@ const listConversations = async (me) => {
     ),
   );
 
+  const unreadCounts = await Promise.all(
+    convs.map((c) =>
+      Message.count({
+        where: {
+          conversationId: c.id,
+          senderId: { [Op.ne]: me },
+          readAt: null,
+        },
+      }),
+    ),
+  );
+
   return convs.map((c, i) => ({
     id: c.id,
     otherUser: plainUser(userMap.get(otherParticipantId(c, me))),
     lastMessage: lastMessages[i] ? toMessageJSON(lastMessages[i]) : null,
     lastMessageAt: c.lastMessageAt,
+    unreadCount: unreadCounts[i],
   }));
 };
 
@@ -377,6 +393,23 @@ const declineRequest = async (me, requestIdRaw) =>
     return toRequestJSON(request);
   });
 
+  const markConversationRead = async (me, conversationId) => {
+    const conv = await getParticipantConversation(conversationId, me);
+
+    await Message.update(
+      { readAt: new Date() },
+      {
+        where: {
+          conversationId: conv.id,
+          senderId: { [Op.ne]: me },
+          readAt: null,
+        },
+      },
+    );
+
+    return { success: true };
+  };
+
 module.exports = {
   HttpError,
   getRelationship,
@@ -391,4 +424,5 @@ module.exports = {
   acceptRequest,
   declineRequest,
   otherParticipantId,
+  markConversationRead,
 };

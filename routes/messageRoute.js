@@ -75,4 +75,13 @@ router.post("/requests/decline/:requestId", authenticateToken, handle(async (req
   res.json({ request });
 }));
 
+router.post(
+  "/conversations/:conversationId/read",
+  authenticateToken,
+  handle(async (req, res) => {
+    res.json(
+      await dm.markConversationRead(req.user.id, req.params.conversationId),
+    );
+  }),
+);
 module.exports = router;
