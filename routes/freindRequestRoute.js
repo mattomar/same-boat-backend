@@ -249,9 +249,14 @@ const result = users.map((user) => {
 // ========================
 // GET STATUS
 // ========================
+
 router.get("/status/:userId", authenticateToken, async (req, res) => {
-  const myId = req.user.id;
-  const otherId = parseInt(req.params.userId);
+  const myId = Number(req.user.id);
+  const otherId = Number(req.params.userId);
+
+  if (!Number.isInteger(otherId) || otherId <= 0) {
+    return res.status(400).json({ message: "Invalid user ID." });
+  }
 
   const request = await FriendRequest.findOne({
     where: {
@@ -262,30 +267,70 @@ router.get("/status/:userId", authenticateToken, async (req, res) => {
     },
   });
 
-  if (!request) {
+  if (!request || request.status === "declined") {
     return res.json({
       status: "none",
       requestId: null,
     });
   }
 
-  if (request.senderId === myId) {
-    return res.json({
-      status: request.status === "accepted" ? "friends" : "pending_sent",
-      requestId: request.id,
-    });
-  }
+  let status;
 
-  if (request.receiverId === myId) {
-    return res.json({
-      status: request.status === "accepted" ? "friends" : "pending_received",
-      requestId: request.id,
-    });
+  if (request.status === "accepted") {
+    status = "friends";
+  } else if (request.status === "pending") {
+    status =
+      Number(request.senderId) === myId ? "pending_sent" : "pending_received";
+  } else {
+    status = "none";
   }
 
   return res.json({
-    status: request.status,
+    status,
     requestId: request.id,
   });
 });
+
+
+ // ========================
+// REMOVE FRIEND
+// ========================
+router.delete("/remove/:userId", authenticateToken, async (req, res) => {
+  const myId = req.user.id;
+  const otherId = Number(req.params.userId);
+
+  if (!Number.isInteger(otherId) || otherId <= 0) {
+    return res.status(400).json({ message: "Invalid user ID." });
+  }
+
+  if (myId === otherId) {
+    return res.status(400).json({
+      message: "You can't remove yourself.",
+    });
+  }
+
+  const friendship = await FriendRequest.findOne({
+    where: {
+      status: "accepted",
+      [Op.or]: [
+        { senderId: myId, receiverId: otherId },
+        { senderId: otherId, receiverId: myId },
+      ],
+    },
+  });
+
+  if (!friendship) {
+    return res.status(404).json({
+      message: "Friendship not found.",
+    });
+  }
+
+  await friendship.destroy();
+
+  return res.json({
+    message: "Friend removed successfully.",
+    removedUserId: otherId,
+  });
+});
+
 module.exports = router;
