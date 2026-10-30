@@ -54,9 +54,10 @@ const toMessageJSON = (m) => ({
   id: m.id,
   conversationId: m.conversationId,
   senderId: m.senderId,
-  text: m.text,
+  text: m.deletedAt ? null : m.text,
   createdAt: m.createdAt,
   readAt: m.readAt,
+  deletedAt: m.deletedAt,
 });
 
 const toRequestJSON = (r) => ({
@@ -266,6 +267,32 @@ const sendMessage = async (me, conversationId, text) => {
   return { conversation: conv, message: toMessageJSON(message) };
 };
 
+const deleteMessage = async (me, messageIdRaw) => {
+  const messageId = parseId(messageIdRaw, "message id");
+
+  const message = await Message.findByPk(messageId);
+
+  if (!message) {
+    throw new HttpError(404, "Message not found.");
+  }
+
+  if (String(message.senderId) !== String(me)) {
+    throw new HttpError(403, "You can only delete your own messages.");
+  }
+
+  if (!message.deletedAt) {
+    message.deletedAt = new Date();
+    await message.save();
+  }
+
+  const conversation = await Conversation.findByPk(message.conversationId);
+
+  return {
+    conversation,
+    message: toMessageJSON(message),
+  };
+};
+
 // ---------- message requests ----------
 const sendRequest = async (me, receiverIdRaw, text) => {
   const receiverId = parseId(receiverIdRaw, "user id");
@@ -425,4 +452,5 @@ module.exports = {
   declineRequest,
   otherParticipantId,
   markConversationRead,
+  deleteMessage,
 };

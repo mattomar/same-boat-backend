@@ -15,6 +15,11 @@ module.exports = (db, sequelize, DataTypes) => {
         type: DataTypes.DATE,
         allowNull: true,
       },
+      deletedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      },
     },
     {
       indexes: [
@@ -49,6 +54,11 @@ module.exports = (db, sequelize, DataTypes) => {
         allowNull: false,
       },
       readAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      },
+      deletedAt: {
         type: DataTypes.DATE,
         allowNull: true,
         defaultValue: null,

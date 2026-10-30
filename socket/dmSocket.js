@@ -16,7 +16,10 @@ const emitters = {
     nsp
       .to(userRoom(conversation.user1Id))
       .to(userRoom(conversation.user2Id))
-      .emit("dm:conversation:updated", { conversationId: conversation.id, lastMessage: message });
+      .emit("dm:conversation:updated", {
+        conversationId: conversation.id,
+        lastMessage: message,
+      });
   },
   requestCreated(request) {
     if (!nsp) return;
@@ -35,7 +38,22 @@ const emitters = {
   },
   requestDeclined(request) {
     if (!nsp) return;
-    nsp.to(userRoom(request.senderId)).emit("dm:request:declined", { requestId: request.id });
+    nsp
+      .to(userRoom(request.senderId))
+      .emit("dm:request:declined", { requestId: request.id });
+  },
+  messageDeleted(conversation, message) {
+    if (!nsp) return;
+
+    nsp.to(convRoom(conversation.id)).emit("dm:message:deleted", message);
+
+    nsp
+      .to(userRoom(conversation.user1Id))
+      .to(userRoom(conversation.user2Id))
+      .emit("dm:conversation:updated", {
+        conversationId: conversation.id,
+        lastMessage: message,
+      });
   },
 };
 

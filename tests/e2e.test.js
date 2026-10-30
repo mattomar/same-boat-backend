@@ -489,6 +489,101 @@ const sockets = [];
 
   check("Unauthorized socket receives no messages", !leakedMessage);
 
+  console.log("\n=== Message deletion ===");
+
+  const messageToDeleteId = socketSend?.message?.id;
+
+  check("Message ID exists for deletion test", !!messageToDeleteId);
+
+  // Bob cannot delete Ann's message.
+  result = await api(B, "DELETE", `/message/${messageToDeleteId}`);
+
+  check("User cannot delete another user's message", result.status === 403);
+
+  let messageInDb = await db.Message.findByPk(messageToDeleteId);
+
+  check(
+    "Forbidden deletion leaves message unchanged",
+    !!messageInDb &&
+      messageInDb.text === "socket hello" &&
+      messageInDb.deletedAt == null,
+  );
+
+  // Invalid and nonexistent IDs.
+  result = await api(A, "DELETE", "/message/not-a-number");
+
+  check("Invalid message ID returns 400", result.status === 400);
+
+  result = await api(A, "DELETE", "/message/999999999");
+
+  check("Nonexistent message returns 404", result.status === 404);
+
+  // Authentication.
+  result = await api(null, "DELETE", `/message/${messageToDeleteId}`);
+
+  check("Unauthenticated deletion returns 401", result.status === 401);
+
+  // Listen for events before deleting.
+  const deletedEventA = waitForEvent(socketA, "dm:message:deleted");
+  const deletedEventB = waitForEvent(socketB, "dm:message:deleted");
+
+  const updatedEventA = waitForEvent(socketA, "dm:conversation:updated");
+  const updatedEventB = waitForEvent(socketB, "dm:conversation:updated");
+
+  // Ann deletes her own message.
+  result = await api(A, "DELETE", `/message/${messageToDeleteId}`);
+
+  check(
+    "Sender can delete their own message",
+    result.status === 200 &&
+      String(result.body?.id) === String(messageToDeleteId) &&
+      !!result.body?.deletedAt &&
+      result.body?.text === null,
+  );
+
+  // Both participants receive deletion events.
+  const [deletedA, deletedB] = await Promise.all([
+    deletedEventA.catch(() => null),
+    deletedEventB.catch(() => null),
+  ]);
+
+  check(
+    "Both users receive message deletion event",
+    !!deletedA &&
+      !!deletedB &&
+      String(deletedA.id) === String(messageToDeleteId) &&
+      String(deletedB.id) === String(messageToDeleteId),
+  );
+
+  // Both participants receive conversation updates.
+  const [updatedA, updatedB] = await Promise.all([
+    updatedEventA.catch(() => null),
+    updatedEventB.catch(() => null),
+  ]);
+
+  check(
+    "Both users receive conversation update",
+    !!updatedA &&
+      !!updatedB &&
+      String(updatedA.conversationId) === String(conversationId) &&
+      String(updatedB.conversationId) === String(conversationId),
+  );
+
+  // Verify soft deletion in database.
+  messageInDb = await db.Message.findByPk(messageToDeleteId);
+
+  check(
+    "Deleted message remains in database with deletedAt",
+    !!messageInDb &&
+      !!messageInDb.deletedAt &&
+      messageInDb.text === "socket hello",
+  );
+
+  // Deleting the same message again should be safe.
+  result = await api(A, "DELETE", `/message/${messageToDeleteId}`);
+
+  check("Deleting the same message twice succeeds", result.status === 200);
+
   console.log("\n=== Pagination ===");
 
   for (let index = 0; index < 5; index++) {
@@ -689,3 +784,4 @@ const sockets = [];
 
   process.exitCode = 2;
 });
+

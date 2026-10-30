@@ -84,4 +84,19 @@ router.post(
     );
   }),
 );
+
+router.delete(
+  "/message/:messageId",
+  authenticateToken,
+  handle(async (req, res) => {
+    const { conversation, message } = await dm.deleteMessage(
+      req.user.id,
+      req.params.messageId,
+    );
+
+    emitters.messageDeleted(conversation, message);
+
+    res.json(message);
+  }),
+);
 module.exports = router;
