@@ -20,6 +20,17 @@ module.exports = (db, sequelize, DataTypes) => {
         allowNull: true,
         defaultValue: null,
       },
+      deletedByUser1At: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      },
+
+      deletedByUser2At: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        defaultValue: null,
+      }
     },
     {
       indexes: [

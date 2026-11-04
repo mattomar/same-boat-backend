@@ -99,4 +99,19 @@ router.delete(
     res.json(message);
   }),
 );
+
+router.delete(
+  "/conversations/:conversationId",
+  authenticateToken,
+  handle(async (req, res) => {
+    const result = await dm.deleteConversation(
+      req.user.id,
+      req.params.conversationId,
+    );
+
+    emitters.conversationDeleted(result.conversationId, req.user.id);
+
+    res.json(result);
+  }),
+);
 module.exports = router;

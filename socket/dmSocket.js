@@ -55,6 +55,13 @@ const emitters = {
         lastMessage: message,
       });
   },
+  conversationDeleted(conversationId, userId) {
+    if (!nsp) return;
+
+    nsp.to(userRoom(userId)).emit("dm:conversation:deleted", {
+      conversationId,
+    });
+  },
 };
 
 function setupDirectMessages(io) {

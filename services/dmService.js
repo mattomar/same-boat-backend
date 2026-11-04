@@ -4,11 +4,16 @@ const db = require("../models");
 
 const { Conversation, Message, MessageRequest, FriendRequest, User } = db;
 
-const USER_ATTRIBUTES = ["id", "username", "firstName", "lastName", "avatarUrl"];
+const USER_ATTRIBUTES = [
+  "id",
+  "username",
+  "firstName",
+  "lastName",
+  "avatarUrl",
+];
 const MAX_MESSAGE_LENGTH = 2000;
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
-// After a decline, the sender must wait this long before asking again.
 const REQUEST_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 class HttpError extends Error {
@@ -29,11 +34,15 @@ const parseId = (value, label = "id") => {
 };
 
 const cleanText = (text) => {
-  if (typeof text !== "string") throw new HttpError(400, "Message text is required.");
+  if (typeof text !== "string")
+    throw new HttpError(400, "Message text is required.");
   const trimmed = text.trim();
   if (!trimmed) throw new HttpError(400, "Message cannot be empty.");
   if (trimmed.length > MAX_MESSAGE_LENGTH) {
-    throw new HttpError(400, `Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`);
+    throw new HttpError(
+      400,
+      `Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`,
+    );
   }
   return trimmed;
 };
@@ -79,9 +88,6 @@ const requireUser = async (id) => {
   return user;
 };
 
-
-
-// Reuses the existing FriendRequest table: an "accepted" row in either direction.
 const areFriends = async (a, b) =>
   !!(await FriendRequest.findOne({
     where: {
@@ -108,12 +114,12 @@ const findOrCreateConversation = async (a, b, transaction) => {
     });
     return conv;
   } catch (err) {
-    if (err instanceof UniqueConstraintError && !transaction) return findConversation(a, b);
+    if (err instanceof UniqueConstraintError && !transaction)
+      return findConversation(a, b);
     throw err;
   }
 };
 
-// 404 for both "missing" and "not yours" so conversation ids can't be probed.
 const getParticipantConversation = async (conversationId, userId) => {
   const id = parseId(conversationId, "conversation id");
   const conv = await Conversation.findByPk(id);
@@ -123,15 +129,30 @@ const getParticipantConversation = async (conversationId, userId) => {
   return conv;
 };
 
-const otherParticipantId = (conv, me) => (conv.user1Id === me ? conv.user2Id : conv.user1Id);
+const otherParticipantId = (conv, me) =>
+  conv.user1Id === me ? conv.user2Id : conv.user1Id;
 
-// ---------- relationship (drives the Message button) ----------
+// Each participant has an independent deletion timestamp.
+const getMyDeletionTimestamp = (conv, me) =>
+  conv.user1Id === me ? conv.deletedByUser1At : conv.deletedByUser2At;
+
+const getOtherDeletionField = (conv, me) =>
+  conv.user1Id === me ? "deletedByUser2At" : "deletedByUser1At";
+
+const getMyDeletionField = (conv, me) =>
+  conv.user1Id === me ? "deletedByUser1At" : "deletedByUser2At";
+
+// ---------- relationship ----------
 const getRelationship = async (me, otherIdRaw) => {
   const otherId = parseId(otherIdRaw, "user id");
   if (otherId === me) throw new HttpError(400, "You can't message yourself.");
   await requireUser(otherId);
 
-  const base = { conversationId: null, requestId: null, canRequestAgain: false };
+  const base = {
+    conversationId: null,
+    requestId: null,
+    canRequestAgain: false,
+  };
 
   const conv = await findConversation(me, otherId);
   if (conv) return { ...base, status: "conversation", conversationId: conv.id };
@@ -141,6 +162,7 @@ const getRelationship = async (me, otherIdRaw) => {
   const pending = await MessageRequest.findOne({
     where: { pairKey: makePairKey(me, otherId), status: "pending" },
   });
+
   if (pending) {
     if (pending.senderId === me) {
       return { ...base, status: "pending_sent", requestId: pending.id };
@@ -157,8 +179,11 @@ const getRelationship = async (me, otherIdRaw) => {
     where: { senderId: me, receiverId: otherId, status: "declined" },
     order: [["respondedAt", "DESC"]],
   });
+
   if (declined) {
-    const retryAt = new Date(new Date(declined.respondedAt).getTime() + REQUEST_COOLDOWN_MS);
+    const retryAt = new Date(
+      new Date(declined.respondedAt).getTime() + REQUEST_COOLDOWN_MS,
+    );
     const canRequestAgain = retryAt <= new Date();
     return {
       ...base,
@@ -181,32 +206,62 @@ const getOrCreateConversation = async (me, otherIdRaw) => {
   const existing = await findConversation(me, otherId);
   if (existing) return existing;
 
-  if (await areFriends(me, otherId)) return findOrCreateConversation(me, otherId);
+  if (await areFriends(me, otherId))
+    return findOrCreateConversation(me, otherId);
 
   throw new HttpError(403, "You need to send a message request first.", {
     code: "REQUEST_REQUIRED",
   });
 };
 
+// Delete only the current user's view of the conversation.
+const deleteConversation = async (me, conversationIdRaw) => {
+  const conv = await getParticipantConversation(conversationIdRaw, me);
+  const field = getMyDeletionField(conv, me);
+
+  await conv.update({ [field]: new Date() });
+
+  return {
+    success: true,
+    conversationId: conv.id,
+  };
+};
+
 const listConversations = async (me) => {
-  const convs = await Conversation.findAll({
+  const allConvs = await Conversation.findAll({
     where: { [Op.or]: [{ user1Id: me }, { user2Id: me }] },
     order: [
       ["lastMessageAt", "DESC NULLS LAST"],
       ["id", "DESC"],
     ],
-    limit: 100,
+    limit: 200,
   });
 
+  // Hide conversations deleted by this user.
+const convs = allConvs.filter((c) => {
+  const deletedAt = getMyDeletionTimestamp(c, me);
+
+  // Show it again only if a newer message has arrived.
+  return (
+    !deletedAt ||
+    (c.lastMessageAt && new Date(c.lastMessageAt) > new Date(deletedAt))
+  );
+});
   const otherIds = convs.map((c) => otherParticipantId(c, me));
   const users = otherIds.length
-    ? await User.findAll({ where: { id: otherIds }, attributes: USER_ATTRIBUTES })
+    ? await User.findAll({
+        where: { id: otherIds },
+        attributes: USER_ATTRIBUTES,
+      })
     : [];
   const userMap = new Map(users.map((u) => [u.id, u]));
 
   const lastMessages = await Promise.all(
     convs.map((c) =>
-      Message.findOne({ where: { conversationId: c.id }, order: [["id", "DESC"]] }),
+      Message.findOne({
+        where: { conversationId: c.id },
+        order: [["id", "DESC"]],
+      }),
     ),
   );
 
@@ -217,6 +272,9 @@ const listConversations = async (me) => {
           conversationId: c.id,
           senderId: { [Op.ne]: me },
           readAt: null,
+          ...(getMyDeletionTimestamp(c, me)
+            ? { createdAt: { [Op.gt]: getMyDeletionTimestamp(c, me) } }
+            : {}),
         },
       }),
     ),
@@ -239,14 +297,23 @@ const getMessages = async (me, conversationId, { limit, before } = {}) => {
   if (!Number.isInteger(pageSize) || pageSize < 1) pageSize = DEFAULT_PAGE_SIZE;
   pageSize = Math.min(pageSize, MAX_PAGE_SIZE);
 
-  const where = { conversationId: conv.id };
-  if (before !== undefined && before !== "") where.id = { [Op.lt]: parseId(before, "cursor") };
+  const deletionTimestamp = getMyDeletionTimestamp(conv, me);
+
+  const where = {
+    conversationId: conv.id,
+    ...(deletionTimestamp ? { createdAt: { [Op.gt]: deletionTimestamp } } : {}),
+  };
+
+  if (before !== undefined && before !== "") {
+    where.id = { [Op.lt]: parseId(before, "cursor") };
+  }
 
   const rows = await Message.findAll({
     where,
     order: [["id", "DESC"]],
     limit: pageSize + 1,
   });
+
   const hasMore = rows.length > pageSize;
   const page = rows.slice(0, pageSize).reverse();
   const other = await requireUser(otherParticipantId(conv, me));
@@ -262,19 +329,26 @@ const getMessages = async (me, conversationId, { limit, before } = {}) => {
 const sendMessage = async (me, conversationId, text) => {
   const conv = await getParticipantConversation(conversationId, me);
   const body = cleanText(text);
-  const message = await Message.create({ conversationId: conv.id, senderId: me, text: body });
-  await conv.update({ lastMessageAt: message.createdAt });
+
+  const message = await Message.create({
+    conversationId: conv.id,
+    senderId: me,
+    text: body,
+  });
+
+  // Update the latest message without clearing either user's deletion timestamp.
+  await conv.update({
+    lastMessageAt: message.createdAt,
+  });
+
   return { conversation: conv, message: toMessageJSON(message) };
 };
 
 const deleteMessage = async (me, messageIdRaw) => {
   const messageId = parseId(messageIdRaw, "message id");
-
   const message = await Message.findByPk(messageId);
 
-  if (!message) {
-    throw new HttpError(404, "Message not found.");
-  }
+  if (!message) throw new HttpError(404, "Message not found.");
 
   if (String(message.senderId) !== String(me)) {
     throw new HttpError(403, "You can only delete your own messages.");
@@ -296,37 +370,56 @@ const deleteMessage = async (me, messageIdRaw) => {
 // ---------- message requests ----------
 const sendRequest = async (me, receiverIdRaw, text) => {
   const receiverId = parseId(receiverIdRaw, "user id");
-  if (receiverId === me) throw new HttpError(400, "You can't message yourself.");
+  if (receiverId === me)
+    throw new HttpError(400, "You can't message yourself.");
+
   const receiver = await requireUser(receiverId);
   const body = cleanText(text);
 
   const rel = await getRelationship(me, receiverId);
+
   if (rel.status === "conversation" || rel.status === "friends") {
     throw new HttpError(409, "You can message this user directly.", {
       code: "DIRECT_MESSAGE_ALLOWED",
       conversationId: rel.conversationId,
     });
   }
+
   if (rel.status === "pending_sent") {
-    throw new HttpError(409, "You already have a pending request to this user.", {
-      code: "REQUEST_PENDING",
-      requestId: rel.requestId,
-    });
+    throw new HttpError(
+      409,
+      "You already have a pending request to this user.",
+      {
+        code: "REQUEST_PENDING",
+        requestId: rel.requestId,
+      },
+    );
   }
+
   if (rel.status === "pending_received") {
-    throw new HttpError(409, "This user already sent you a request. Respond to it instead.", {
-      code: "REQUEST_INCOMING",
-      requestId: rel.requestId,
-    });
+    throw new HttpError(
+      409,
+      "This user already sent you a request. Respond to it instead.",
+      {
+        code: "REQUEST_INCOMING",
+        requestId: rel.requestId,
+      },
+    );
   }
+
   if (rel.status === "declined" && !rel.canRequestAgain) {
-    throw new HttpError(403, "Your last request was declined. Try again later.", {
-      code: "REQUEST_COOLDOWN",
-      retryAt: rel.retryAt,
-    });
+    throw new HttpError(
+      403,
+      "Your last request was declined. Try again later.",
+      {
+        code: "REQUEST_COOLDOWN",
+        retryAt: rel.retryAt,
+      },
+    );
   }
 
   let request;
+
   try {
     request = await MessageRequest.create({
       senderId: me,
@@ -337,15 +430,20 @@ const sendRequest = async (me, receiverIdRaw, text) => {
     });
   } catch (err) {
     if (err instanceof UniqueConstraintError) {
-      throw new HttpError(409, "A pending request already exists between you two.", {
-        code: "REQUEST_PENDING",
-      });
+      throw new HttpError(
+        409,
+        "A pending request already exists between you two.",
+        {
+          code: "REQUEST_PENDING",
+        },
+      );
     }
     throw err;
   }
 
   request.sender = await User.findByPk(me, { attributes: USER_ATTRIBUTES });
   request.receiver = receiver;
+
   return toRequestJSON(request);
 };
 
@@ -356,6 +454,7 @@ const listIncomingRequests = async (me) => {
     order: [["createdAt", "DESC"]],
     limit: 100,
   });
+
   return rows.map(toRequestJSON);
 };
 
@@ -366,26 +465,34 @@ const listOutgoingRequests = async (me) => {
     order: [["createdAt", "DESC"]],
     limit: 50,
   });
+
   return rows.map(toRequestJSON);
 };
 
 const loadPendingRequestForReceiver = async (me, requestIdRaw, transaction) => {
   const id = parseId(requestIdRaw, "request id");
+
   const request = await MessageRequest.findByPk(id, {
     transaction,
     lock: transaction ? transaction.LOCK.UPDATE : undefined,
   });
+
   if (!request) throw new HttpError(404, "Message request not found.");
   if (request.receiverId !== me) throw new HttpError(403, "Not allowed.");
-  if (request.status !== "pending") throw new HttpError(409, "Request already handled.");
+  if (request.status !== "pending")
+    throw new HttpError(409, "Request already handled.");
+
   return request;
 };
 
-// Accepting creates the conversation and turns the stored first message into a real one.
 const acceptRequest = async (me, requestIdRaw) =>
   db.sequelize.transaction(async (t) => {
     const request = await loadPendingRequestForReceiver(me, requestIdRaw, t);
-    const conversation = await findOrCreateConversation(request.senderId, request.receiverId, t);
+    const conversation = await findOrCreateConversation(
+      request.senderId,
+      request.receiverId,
+      t,
+    );
 
     const message = await Message.create(
       {
@@ -397,12 +504,22 @@ const acceptRequest = async (me, requestIdRaw) =>
       { transaction: t },
     );
 
-    const last = conversation.lastMessageAt && new Date(conversation.lastMessageAt);
+    const last =
+      conversation.lastMessageAt && new Date(conversation.lastMessageAt);
+
     if (!last || last < message.createdAt) {
-      await conversation.update({ lastMessageAt: message.createdAt }, { transaction: t });
+      await conversation.update(
+        { lastMessageAt: message.createdAt },
+        { transaction: t },
+      );
     }
+
     await request.update(
-      { status: "accepted", respondedAt: new Date(), conversationId: conversation.id },
+      {
+        status: "accepted",
+        respondedAt: new Date(),
+        conversationId: conversation.id,
+      },
       { transaction: t },
     );
 
@@ -416,26 +533,33 @@ const acceptRequest = async (me, requestIdRaw) =>
 const declineRequest = async (me, requestIdRaw) =>
   db.sequelize.transaction(async (t) => {
     const request = await loadPendingRequestForReceiver(me, requestIdRaw, t);
-    await request.update({ status: "declined", respondedAt: new Date() }, { transaction: t });
+    await request.update(
+      { status: "declined", respondedAt: new Date() },
+      { transaction: t },
+    );
     return toRequestJSON(request);
   });
 
-  const markConversationRead = async (me, conversationId) => {
-    const conv = await getParticipantConversation(conversationId, me);
+const markConversationRead = async (me, conversationId) => {
+  const conv = await getParticipantConversation(conversationId, me);
+  const deletionTimestamp = getMyDeletionTimestamp(conv, me);
 
-    await Message.update(
-      { readAt: new Date() },
-      {
-        where: {
-          conversationId: conv.id,
-          senderId: { [Op.ne]: me },
-          readAt: null,
-        },
+  await Message.update(
+    { readAt: new Date() },
+    {
+      where: {
+        conversationId: conv.id,
+        senderId: { [Op.ne]: me },
+        readAt: null,
+        ...(deletionTimestamp
+          ? { createdAt: { [Op.gt]: deletionTimestamp } }
+          : {}),
       },
-    );
+    },
+  );
 
-    return { success: true };
-  };
+  return { success: true };
+};
 
 module.exports = {
   HttpError,
@@ -453,4 +577,5 @@ module.exports = {
   otherParticipantId,
   markConversationRead,
   deleteMessage,
+  deleteConversation,
 };

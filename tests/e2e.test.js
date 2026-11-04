@@ -651,6 +651,91 @@ const sockets = [];
     result.body?.[0]?.id === conversationId,
   );
 
+
+  console.log("\n=== Per-user conversation deletion ===");
+
+  // Ann deletes her conversation with Bob.
+  const conversationDeletedEvent = waitForEvent(
+    socketA,
+    "dm:conversation:deleted",
+  );
+
+  result = await api(A, "DELETE", `/conversations/${conversationId}`);
+
+  check(
+    "User can delete their own conversation",
+    result.status === 200 && result.body?.success === true,
+  );
+
+  const deletionPayload = await conversationDeletedEvent.catch(() => null);
+
+  check(
+    "Only the deleting user receives the deletion event",
+    !!deletionPayload &&
+      String(deletionPayload.conversationId) === String(conversationId),
+  );
+
+  // Ann's inbox should no longer contain Bob.
+  result = await api(A, "GET", "/conversations");
+
+  check(
+    "Deleted conversation disappears from Ann's inbox",
+    Array.isArray(result.body) &&
+      !result.body.some((c) => String(c.id) === String(conversationId)),
+  );
+
+  // Bob's inbox should remain unchanged.
+  result = await api(B, "GET", "/conversations");
+
+  check(
+    "Conversation remains in Bob's inbox",
+    Array.isArray(result.body) &&
+      result.body.some((c) => String(c.id) === String(conversationId)),
+  );
+
+  // Ann should not see the old messages.
+  result = await api(A, "GET", `/conversations/${conversationId}/messages`);
+
+  check(
+    "Ann cannot see messages sent before deletion",
+    result.status === 200 && result.body?.messages?.length === 0,
+  );
+
+  // Bob sends a new message.
+  result = await api(B, "POST", `/conversations/${conversationId}/messages`, {
+    text: "New message after deletion",
+  });
+
+  check("Bob can still send messages", result.status === 201);
+
+  // Ann's conversation should reappear.
+  result = await api(A, "GET", "/conversations");
+
+  check(
+    "Conversation reappears in Ann's inbox after a new message",
+    Array.isArray(result.body) &&
+      result.body.some((c) => String(c.id) === String(conversationId)),
+  );
+
+  // Ann should see the new message but not old history.
+  result = await api(A, "GET", `/conversations/${conversationId}/messages`);
+
+  check(
+    "Ann sees only messages sent after deletion",
+    result.status === 200 &&
+      result.body?.messages?.length === 1 &&
+      result.body.messages[0].text === "New message after deletion",
+  );
+
+  // Bob must retain his entire history.
+  result = await api(B, "GET", `/conversations/${conversationId}/messages`);
+
+  check(
+    "Bob retains his full conversation history",
+    result.status === 200 && result.body?.messages?.length > 1,
+  );
+
+
   console.log("\n=== Decline and cooldown ===");
 
   result = await api(C, "POST", `/requests/send/${D.id}`, {
