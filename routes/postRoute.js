@@ -280,6 +280,34 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
   }
 });
 
+// GET posts by user
+router.get("/user/:userId", async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ message: "Invalid user ID" });
+    }
+
+    const posts = await Post.findAll({
+      where: { userId },
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "username"],
+        },
+      ],
+      order: [["createdAt", "DESC"]],
+    });
+
+    res.status(200).json(posts);
+  } catch (error) {
+    console.error("Fetch user posts error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 router.get("/test", (req, res) => {
   res.send("✅ Post route works");
