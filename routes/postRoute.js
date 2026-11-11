@@ -121,6 +121,10 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
     const { content, parentId } = req.body;
     const userId = req.user.id;
 
+    if (!Number.isInteger(Number(postId)) || Number(postId) <= 0) {
+      return res.status(400).json({ message: "Invalid post ID" });
+    }
+
     const post = await Post.findByPk(postId);
     if (!post) return res.status(404).json({ error: "Post not found" });
 
@@ -171,36 +175,111 @@ router.get("/:postId/comments", async (req, res) => {
   }
 });
 
+
 // DELETE a comment + its nested replies
 const deleteCommentWithReplies = async (commentId) => {
-  const replies = await Comment.findAll({ where: { parentId: commentId } });
+  const replies = await Comment.findAll({
+    where: { parentId: commentId },
+  });
+
   for (const reply of replies) {
     await deleteCommentWithReplies(reply.id);
   }
-  await Comment.destroy({ where: { id: commentId } });
+
+  await Comment.destroy({
+    where: { id: commentId },
+  });
 };
 
 router.delete("/comments/:commentId", authenticateToken, async (req, res) => {
   try {
     const { commentId } = req.params;
     const userId = req.user.id;
-    console.log("Delete commentId:", commentId);
+
+    if (!Number.isInteger(Number(commentId)) || Number(commentId) <= 0) {
+      return res.status(400).json({ message: "Invalid comment ID" });
+    }
 
     const comment = await Comment.findByPk(commentId);
-    if (!comment) return res.status(404).json({ message: "Comment not found" });
 
-    if (comment.userId !== userId) {
-      return res.status(403).json({ message: "Unauthorized" });
+    if (!comment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    const post = await Post.findByPk(comment.postId);
+
+    if (!post) {
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    const isCommentOwner = String(comment.userId) === String(userId);
+    const isPostOwner = String(post.userId) === String(userId);
+
+    if (!isCommentOwner && !isPostOwner) {
+      return res.status(403).json({
+        message: "You are not authorized to delete this comment",
+      });
     }
 
     await deleteCommentWithReplies(comment.id);
 
-    res.status(200).json({ message: "Comment and its replies deleted successfully" });
+    res.status(200).json({
+      message: "Comment and its replies deleted successfully",
+    });
   } catch (error) {
     console.error("Delete comment error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
+
+// DELETE a post and all its comments/replies
+router.delete("/:postId", authenticateToken, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const userId = req.user.id;
+        if (!Number.isInteger(Number(postId)) || Number(postId) <= 0) {
+          return res.status(400).json({ message: "Invalid post ID" });
+        }
+
+
+
+    const post = await Post.findByPk(postId);
+
+    if (!post) {
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    if (String(post.userId) !== String(userId)) {
+      return res.status(403).json({
+        message: "You are not authorized to delete this post",
+      });
+    }
+
+    // Find all top-level comments on this post
+    const comments = await Comment.findAll({
+      where: {
+        postId: post.id,
+        parentId: null,
+      },
+    });
+
+    // Delete each comment and its nested replies
+    for (const comment of comments) {
+      await deleteCommentWithReplies(comment.id);
+    }
+
+    await post.destroy();
+
+    res.status(200).json({
+      message: "Post and its comments deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete post error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 router.get("/test", (req, res) => {
   res.send("✅ Post route works");

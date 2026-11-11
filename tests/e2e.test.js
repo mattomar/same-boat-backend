@@ -9,6 +9,7 @@ const { io: ioc } = require("socket.io-client");
 const db = require("../models");
 const { setupDirectMessages } = require("../socket/dmSocket");
 const messageRoutes = require("../routes/messageRoute");
+const postRoutes = require("../routes/postRoute");
 
 let passed = 0;
 let failed = 0;
@@ -60,6 +61,9 @@ const sockets = [];
   const app = express();
   app.use(express.json());
   app.use("/api/messages", messageRoutes);
+  app.use("/posts", postRoutes);
+
+  
 
   const server = http.createServer(app);
   const io = new Server(server);
@@ -98,6 +102,28 @@ const sockets = [];
     } catch {
       // Some endpoints may return non-JSON responses.
     }
+
+    return {
+      status: response.status,
+      body: json,
+    };
+  };
+
+  const postApi = async (user, method, path, body) => {
+    const response = await fetch(`${baseUrl}/posts${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(user ? { Authorization: `Bearer ${tokenFor(user)}` } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+
+    let json = null;
+
+    try {
+      json = await response.json();
+    } catch {}
 
     return {
       status: response.status,
@@ -848,6 +874,156 @@ const sockets = [];
   );
 
   console.log(`\n${passed} passed, ${failed} failed`);
+
+
+console.log("\n=== Post and comment deletion ===");
+
+// Create an isolated category.
+const testCategory = await db.Category.create({
+  name: `Deletion Test ${testRun}`,
+});
+
+// Create three posts belonging to different users.
+const postA = await db.Post.create({
+  content: "Ann's post",
+  userId: A.id,
+  categoryId: testCategory.id,
+});
+
+const postB = await db.Post.create({
+  content: "Bob's post",
+  userId: B.id,
+  categoryId: testCategory.id,
+});
+
+// Ann's post: Bob's comment, with Cy replying to it.
+const commentB = await db.Comment.create({
+  content: "Bob's comment",
+  userId: B.id,
+  postId: postA.id,
+});
+
+const replyC = await db.Comment.create({
+  content: "Cy's reply",
+  userId: C.id,
+  postId: postA.id,
+  parentId: commentB.id,
+});
+
+// Another comment on Ann's post.
+const commentC = await db.Comment.create({
+  content: "Cy's other comment",
+  userId: C.id,
+  postId: postA.id,
+});
+
+// Bob's post: Ann's comment.
+const commentA = await db.Comment.create({
+  content: "Ann's comment",
+  userId: A.id,
+  postId: postB.id,
+});
+
+// Authentication.
+result = await postApi(null, "DELETE", `/${postA.id}`);
+
+check("Unauthenticated post deletion returns 401", result.status === 401);
+
+result = await postApi(null, "DELETE", `/comments/${commentB.id}`);
+
+check("Unauthenticated comment deletion returns 401", result.status === 401);
+
+// Post ownership.
+result = await postApi(B, "DELETE", `/${postA.id}`);
+
+check("User cannot delete another user's post", result.status === 403);
+
+check(
+  "Forbidden post deletion leaves post intact",
+  !!(await db.Post.findByPk(postA.id)),
+);
+
+result = await postApi(A, "DELETE", "/not-a-number");
+
+check("Invalid post ID returns an error", result.status === 400);
+
+result = await postApi(A, "DELETE", "/999999999");
+
+check("Nonexistent post returns 404", result.status === 404);
+
+// Comment ownership.
+result = await postApi(D, "DELETE", `/comments/${commentB.id}`);
+
+check(
+  "Unrelated user cannot delete another user's comment",
+  result.status === 403,
+);
+
+check(
+  "Forbidden comment deletion leaves comment intact",
+  !!(await db.Comment.findByPk(commentB.id)),
+);
+
+// Comment author can delete their own comment.
+result = await postApi(C, "DELETE", `/comments/${commentC.id}`);
+
+check("Comment author can delete their own comment", result.status === 200);
+
+check(
+  "Deleting a comment removes it from the database",
+  !(await db.Comment.findByPk(commentC.id)),
+);
+
+// Post owner can delete someone else's comment.
+result = await postApi(A, "DELETE", `/comments/${commentB.id}`);
+
+check("Post owner can delete another user's comment", result.status === 200);
+
+check(
+  "Deleting a comment also deletes its nested replies",
+  !(await db.Comment.findByPk(commentB.id)) &&
+    !(await db.Comment.findByPk(replyC.id)),
+);
+
+// Comment author can delete their own comment on someone else's post.
+result = await postApi(A, "DELETE", `/comments/${commentA.id}`);
+
+check(
+  "User can delete their own comment on another user's post",
+  result.status === 200 && !(await db.Comment.findByPk(commentA.id)),
+);
+
+// Post owner can delete their own post and all comments.
+const postAComment1 = await db.Comment.create({
+  content: "Comment one",
+  userId: B.id,
+  postId: postA.id,
+});
+
+const postAComment2 = await db.Comment.create({
+  content: "Reply to comment one",
+  userId: C.id,
+  postId: postA.id,
+  parentId: postAComment1.id,
+});
+
+result = await postApi(A, "DELETE", `/${postA.id}`);
+
+check("Post owner can delete their own post", result.status === 200);
+
+check(
+  "Deleting a post removes all its comments and replies",
+  !(await db.Post.findByPk(postA.id)) &&
+    !(await db.Comment.findByPk(postAComment1.id)) &&
+    !(await db.Comment.findByPk(postAComment2.id)),
+);
+
+// Bob's post should still exist.
+check(
+  "Deleting Ann's post does not affect Bob's post",
+  !!(await db.Post.findByPk(postB.id)),
+);
+
 
   for (const socket of sockets) {
     socket.disconnect();
