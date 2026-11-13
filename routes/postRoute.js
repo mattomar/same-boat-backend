@@ -3,7 +3,8 @@ const router = express.Router();
 const multer = require("multer");
 const streamifier = require("streamifier");
 const cloudinary = require("../config/cloudinary");
-const { Post, Category, User, Comment } = require("../models");
+const { Post, Category, User, Comment, Notification } = require("../models");
+const { Op } = require("sequelize");
 const authenticateToken = require("../middlewares/auth");
 
 const storage = multer.memoryStorage();
@@ -115,30 +116,132 @@ router.get("/categories", async (req, res) => {
   }
 });
 // POST a comment (or reply)
+// POST a comment or reply + notify mentioned users
 router.post("/:postId/comments", authenticateToken, async (req, res) => {
   try {
-    const { postId } = req.params;
+    const postId = Number(req.params.postId);
     const { content, parentId } = req.body;
     const userId = req.user.id;
 
-    if (!Number.isInteger(Number(postId)) || Number(postId) <= 0) {
+    if (!Number.isInteger(postId) || postId <= 0) {
       return res.status(400).json({ message: "Invalid post ID" });
     }
 
-    const post = await Post.findByPk(postId);
-    if (!post) return res.status(404).json({ error: "Post not found" });
+    if (!content || !content.trim()) {
+      return res.status(400).json({
+        message: "Comment cannot be empty",
+      });
+    }
 
+    const post = await Post.findByPk(postId);
+
+    if (!post) {
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    // Validate parent comment.
+    let validParentId = null;
+
+    if (parentId !== undefined && parentId !== null) {
+      const parsedParentId = Number(parentId);
+
+      if (!Number.isInteger(parsedParentId) || parsedParentId <= 0) {
+        return res.status(400).json({
+          message: "Invalid parent comment ID",
+        });
+      }
+
+      const parentComment = await Comment.findOne({
+        where: {
+          id: parsedParentId,
+          postId,
+        },
+      });
+
+      if (!parentComment) {
+        return res.status(404).json({
+          message: "Parent comment not found",
+        });
+      }
+
+      validParentId = parsedParentId;
+    }
+
+    // Create comment.
     const comment = await Comment.create({
-      content,
+      content: content.trim(),
       userId,
       postId,
-      parentId: parentId || null,
+      parentId: validParentId,
     });
+    // Notify the post owner when someone comments
+    if (String(post.userId) !== String(userId)) {
+      try {
+        const sender = await User.findByPk(userId, {
+          attributes: ["id", "username"],
+        });
+
+        await Notification.create({
+          userId: post.userId,
+          type: "comment",
+          message: `${sender.username} commented on your post`,
+          senderId: userId,
+          postId,
+        });
+      } catch (notificationError) {
+        console.error("Comment notification error:", notificationError);
+      }
+    }
+
+    // Find all @mentions.
+    const mentions = content.match(/@([A-Za-z0-9_.-]+)/g) || [];
+
+    // Remove duplicate usernames.
+    const uniqueUsernames = [
+      ...new Set(mentions.map((mention) => mention.substring(1).toLowerCase())),
+    ];
+
+    // Get sender information.
+    const sender = await User.findByPk(userId, {
+      attributes: ["id", "username"],
+    });
+
+    // Create notifications.
+    try {
+      for (const username of uniqueUsernames) {
+        const mentionedUser = await User.findOne({
+          where: {
+            username: {
+              [Op.iLike]: username,
+            },
+          },
+        });
+
+        // Skip nonexistent users and self-mentions.
+        if (!mentionedUser || String(mentionedUser.id) === String(userId)) {
+          continue;
+        }
+
+        await Notification.create({
+          userId: mentionedUser.id,
+          type: "mention",
+          message: `${sender.username} mentioned you in a comment`,
+          senderId: userId,
+          postId,
+        });
+      }
+    } catch (notificationError) {
+      // Don't fail comment creation if notification creation fails.
+      console.error("Mention notification error:", notificationError);
+    }
 
     res.status(201).json(comment);
   } catch (err) {
     console.error("Create comment error:", err);
-    res.status(500).json({ error: "Internal server error" });
+
+    res.status(500).json({
+      error: "Internal server error",
+    });
   }
 });
 
