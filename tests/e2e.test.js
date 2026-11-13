@@ -8,8 +8,11 @@ const { io: ioc } = require("socket.io-client");
 
 const db = require("../models");
 const { setupDirectMessages } = require("../socket/dmSocket");
+const { Op } = require("sequelize");
+const blockRoutes = require("../routes/blockRoute");
 const messageRoutes = require("../routes/messageRoute");
 const postRoutes = require("../routes/postRoute");
+
 
 let passed = 0;
 let failed = 0;
@@ -60,8 +63,9 @@ const sockets = [];
 
   const app = express();
   app.use(express.json());
-  app.use("/api/messages", messageRoutes);
-  app.use("/posts", postRoutes);
+app.use("/api/messages", messageRoutes);
+app.use("/posts", postRoutes);
+app.use("/api/blocks", blockRoutes);
 
   
 
@@ -117,6 +121,27 @@ const sockets = [];
         ...(user ? { Authorization: `Bearer ${tokenFor(user)}` } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+
+    let json = null;
+
+    try {
+      json = await response.json();
+    } catch {}
+
+    return {
+      status: response.status,
+      body: json,
+    };
+  };
+
+  const blockApi = async (user, method, path) => {
+    const response = await fetch(`${baseUrl}/api/blocks${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(user ? { Authorization: `Bearer ${tokenFor(user)}` } : {}),
+      },
     });
 
     let json = null;
@@ -1023,6 +1048,135 @@ check(
   "Deleting Ann's post does not affect Bob's post",
   !!(await db.Post.findByPk(postB.id)),
 );
+
+console.log("\n=== Blocking and DM socket protection ===");
+
+// Ann blocks Bob.
+const blockedEventA = waitForEvent(socketA, "dm:conversation:deleted");
+
+const blockedEventB = waitForEvent(socketB, "dm:conversation:deleted");
+
+result = await blockApi(A, "POST", `/${B.id}`);
+
+check("Ann can block Bob", result.status === 200);
+
+// Both users receive the deletion event.
+const [blockedA, blockedB] = await Promise.all([
+  blockedEventA.catch(() => null),
+  blockedEventB.catch(() => null),
+]);
+
+check(
+  "Both users receive conversation deletion event",
+  !!blockedA &&
+    !!blockedB &&
+    String(blockedA.conversationId) === String(conversationId) &&
+    String(blockedB.conversationId) === String(conversationId),
+);
+
+// Check block status.
+result = await blockApi(A, "GET", `/check/${B.id}`);
+
+check(
+  "Block relationship is recorded",
+  result.status === 200 &&
+    result.body?.blockedByMe === true &&
+    result.body?.isBlocked === true,
+);
+
+// Both inboxes hide each other.
+result = await api(A, "GET", "/conversations");
+
+check(
+  "Blocker no longer sees blocked user in inbox",
+  Array.isArray(result.body) &&
+    !result.body.some((c) => String(c.otherUser?.id) === String(B.id)),
+);
+
+result = await api(B, "GET", "/conversations");
+
+check(
+  "Blocked user no longer sees blocker in inbox",
+  Array.isArray(result.body) &&
+    !result.body.some((c) => String(c.otherUser?.id) === String(A.id)),
+);
+
+// Both users lose socket access.
+const joinBlockedA = await emitAck(socketA, "dm:join", {
+  conversationId,
+});
+
+const joinBlockedB = await emitAck(socketB, "dm:join", {
+  conversationId,
+});
+
+check("Blocker cannot rejoin old conversation", joinBlockedA?.ok === false);
+
+check(
+  "Blocked user cannot rejoin old conversation",
+  joinBlockedB?.ok === false,
+);
+
+// Neither user can send through the old socket.
+const sendBlockedA = await emitAck(socketA, "dm:send", {
+  conversationId,
+  text: "Trying after blocking",
+});
+
+const sendBlockedB = await emitAck(socketB, "dm:send", {
+  conversationId,
+  text: "Trying after being blocked",
+});
+
+check("Blocker cannot send through old socket", sendBlockedA?.ok === false);
+
+check(
+  "Blocked user cannot send through old socket",
+  sendBlockedB?.ok === false,
+);
+
+// REST history access is denied.
+result = await api(A, "GET", `/conversations/${conversationId}/messages`);
+
+check("Blocker cannot access old DM history", result.status === 404);
+
+result = await api(B, "GET", `/conversations/${conversationId}/messages`);
+
+check("Blocked user cannot access old DM history", result.status === 404);
+
+// Friend requests between them should be gone.
+const remainingFriendRequest = await db.FriendRequest.findOne({
+  where: {
+    [Op.or]: [
+      { senderId: A.id, receiverId: B.id },
+      { senderId: B.id, receiverId: A.id },
+    ],
+  },
+});
+
+check("Friend requests between users are removed", !remainingFriendRequest);
+
+// Ann unblocks Bob.
+result = await blockApi(A, "DELETE", `/${B.id}`);
+
+check("Ann can unblock Bob", result.status === 200);
+
+result = await blockApi(A, "GET", `/check/${B.id}`);
+
+check(
+  "Block relationship is removed",
+  result.status === 200 && result.body?.isBlocked === false,
+);
+
+// The old conversation must remain hidden.
+result = await api(A, "GET", "/conversations");
+
+check(
+  "Unblocking does not restore old conversation",
+  Array.isArray(result.body) &&
+    !result.body.some((c) => String(c.otherUser?.id) === String(B.id)),
+);
+
 
 
   for (const socket of sockets) {

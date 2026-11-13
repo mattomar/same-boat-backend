@@ -2,7 +2,8 @@
 const { Op, UniqueConstraintError } = require("sequelize");
 const db = require("../models");
 
-const { Conversation, Message, MessageRequest, FriendRequest, User } = db;
+const { Conversation, Message, MessageRequest, FriendRequest, User, Block } =
+  db;
 
 const USER_ATTRIBUTES = [
   "id",
@@ -11,6 +12,7 @@ const USER_ATTRIBUTES = [
   "lastName",
   "avatarUrl",
 ];
+
 const MAX_MESSAGE_LENGTH = 2000;
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
@@ -25,29 +27,40 @@ class HttpError extends Error {
 }
 
 // ---------- helpers ----------
+
 const parseId = (value, label = "id") => {
   const n = Number(value);
+
   if (!Number.isInteger(n) || n <= 0 || n > 2147483647) {
     throw new HttpError(400, `Invalid ${label}.`);
   }
+
   return n;
 };
 
 const cleanText = (text) => {
-  if (typeof text !== "string")
+  if (typeof text !== "string") {
     throw new HttpError(400, "Message text is required.");
+  }
+
   const trimmed = text.trim();
-  if (!trimmed) throw new HttpError(400, "Message cannot be empty.");
+
+  if (!trimmed) {
+    throw new HttpError(400, "Message cannot be empty.");
+  }
+
   if (trimmed.length > MAX_MESSAGE_LENGTH) {
     throw new HttpError(
       400,
       `Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`,
     );
   }
+
   return trimmed;
 };
 
 const orderPair = (a, b) => (a < b ? [a, b] : [b, a]);
+
 const makePairKey = (a, b) => orderPair(a, b).join(":");
 
 const plainUser = (u) =>
@@ -83,9 +96,57 @@ const toRequestJSON = (r) => ({
 });
 
 const requireUser = async (id) => {
-  const user = await User.findByPk(id, { attributes: USER_ATTRIBUTES });
-  if (!user) throw new HttpError(404, "User not found.");
+  const user = await User.findByPk(id, {
+    attributes: USER_ATTRIBUTES,
+  });
+
+  if (!user) {
+    throw new HttpError(404, "User not found.");
+  }
+
   return user;
+};
+
+// Check blocks in BOTH directions.
+const isBlocked = async (a, b, transaction) => {
+  const block = await Block.findOne({
+    where: {
+      [Op.or]: [
+        { blockerId: a, blockedUserId: b },
+        { blockerId: b, blockedUserId: a },
+      ],
+    },
+    transaction,
+  });
+
+  return !!block;
+};
+
+// Return the same response regardless of who initiated the block.
+const assertNotBlocked = async (a, b, transaction) => {
+  if (await isBlocked(a, b, transaction)) {
+    throw new HttpError(404, "User not found.");
+  }
+};
+
+// Get every user who either blocked me or was blocked by me.
+const getBlockedUserIds = async (me) => {
+  const blocks = await Block.findAll({
+    where: {
+      [Op.or]: [{ blockerId: me }, { blockedUserId: me }],
+    },
+    attributes: ["blockerId", "blockedUserId"],
+  });
+
+  return new Set(
+    blocks.map((block) =>
+      String(
+        String(block.blockerId) === String(me)
+          ? block.blockedUserId
+          : block.blockerId,
+      ),
+    ),
+  );
 };
 
 const areFriends = async (a, b) =>
@@ -101,21 +162,28 @@ const areFriends = async (a, b) =>
 
 const findConversation = (a, b) => {
   const [user1Id, user2Id] = orderPair(a, b);
-  return Conversation.findOne({ where: { user1Id, user2Id } });
+
+  return Conversation.findOne({
+    where: { user1Id, user2Id },
+  });
 };
 
 const findOrCreateConversation = async (a, b, transaction) => {
   const [user1Id, user2Id] = orderPair(a, b);
+
   try {
     const [conv] = await Conversation.findOrCreate({
       where: { user1Id, user2Id },
       defaults: { user1Id, user2Id },
       transaction,
     });
+
     return conv;
   } catch (err) {
-    if (err instanceof UniqueConstraintError && !transaction)
+    if (err instanceof UniqueConstraintError && !transaction) {
       return findConversation(a, b);
+    }
+
     throw err;
   }
 };
@@ -123,29 +191,47 @@ const findOrCreateConversation = async (a, b, transaction) => {
 const getParticipantConversation = async (conversationId, userId) => {
   const id = parseId(conversationId, "conversation id");
   const conv = await Conversation.findByPk(id);
-  if (!conv || (conv.user1Id !== userId && conv.user2Id !== userId)) {
+
+  if (
+    !conv ||
+    (String(conv.user1Id) !== String(userId) &&
+      String(conv.user2Id) !== String(userId))
+  ) {
     throw new HttpError(404, "Conversation not found.");
   }
+
+  const otherId = otherParticipantId(conv, userId);
+
+  await assertNotBlocked(userId, otherId);
+
   return conv;
 };
 
 const otherParticipantId = (conv, me) =>
-  conv.user1Id === me ? conv.user2Id : conv.user1Id;
+  String(conv.user1Id) === String(me) ? conv.user2Id : conv.user1Id;
 
 // Each participant has an independent deletion timestamp.
 const getMyDeletionTimestamp = (conv, me) =>
-  conv.user1Id === me ? conv.deletedByUser1At : conv.deletedByUser2At;
+  String(conv.user1Id) === String(me)
+    ? conv.deletedByUser1At
+    : conv.deletedByUser2At;
 
 const getOtherDeletionField = (conv, me) =>
-  conv.user1Id === me ? "deletedByUser2At" : "deletedByUser1At";
+  String(conv.user1Id) === String(me) ? "deletedByUser2At" : "deletedByUser1At";
 
 const getMyDeletionField = (conv, me) =>
-  conv.user1Id === me ? "deletedByUser1At" : "deletedByUser2At";
+  String(conv.user1Id) === String(me) ? "deletedByUser1At" : "deletedByUser2At";
 
 // ---------- relationship ----------
+
 const getRelationship = async (me, otherIdRaw) => {
   const otherId = parseId(otherIdRaw, "user id");
-  if (otherId === me) throw new HttpError(400, "You can't message yourself.");
+
+  if (otherId === me) {
+    throw new HttpError(400, "You can't message yourself.");
+  }
+
+  await assertNotBlocked(me, otherId);
   await requireUser(otherId);
 
   const base = {
@@ -155,18 +241,38 @@ const getRelationship = async (me, otherIdRaw) => {
   };
 
   const conv = await findConversation(me, otherId);
-  if (conv) return { ...base, status: "conversation", conversationId: conv.id };
 
-  if (await areFriends(me, otherId)) return { ...base, status: "friends" };
+  if (conv) {
+    return {
+      ...base,
+      status: "conversation",
+      conversationId: conv.id,
+    };
+  }
+
+  if (await areFriends(me, otherId)) {
+    return {
+      ...base,
+      status: "friends",
+    };
+  }
 
   const pending = await MessageRequest.findOne({
-    where: { pairKey: makePairKey(me, otherId), status: "pending" },
+    where: {
+      pairKey: makePairKey(me, otherId),
+      status: "pending",
+    },
   });
 
   if (pending) {
-    if (pending.senderId === me) {
-      return { ...base, status: "pending_sent", requestId: pending.id };
+    if (String(pending.senderId) === String(me)) {
+      return {
+        ...base,
+        status: "pending_sent",
+        requestId: pending.id,
+      };
     }
+
     return {
       ...base,
       status: "pending_received",
@@ -176,7 +282,11 @@ const getRelationship = async (me, otherIdRaw) => {
   }
 
   const declined = await MessageRequest.findOne({
-    where: { senderId: me, receiverId: otherId, status: "declined" },
+    where: {
+      senderId: me,
+      receiverId: otherId,
+      status: "declined",
+    },
     order: [["respondedAt", "DESC"]],
   });
 
@@ -184,7 +294,9 @@ const getRelationship = async (me, otherIdRaw) => {
     const retryAt = new Date(
       new Date(declined.respondedAt).getTime() + REQUEST_COOLDOWN_MS,
     );
+
     const canRequestAgain = retryAt <= new Date();
+
     return {
       ...base,
       status: "declined",
@@ -194,20 +306,34 @@ const getRelationship = async (me, otherIdRaw) => {
     };
   }
 
-  return { ...base, status: "none", canRequestAgain: true };
+  return {
+    ...base,
+    status: "none",
+    canRequestAgain: true,
+  };
 };
 
 // ---------- conversations ----------
+
 const getOrCreateConversation = async (me, otherIdRaw) => {
   const otherId = parseId(otherIdRaw, "user id");
-  if (otherId === me) throw new HttpError(400, "You can't message yourself.");
+
+  if (otherId === me) {
+    throw new HttpError(400, "You can't message yourself.");
+  }
+
+  await assertNotBlocked(me, otherId);
   await requireUser(otherId);
 
   const existing = await findConversation(me, otherId);
-  if (existing) return existing;
 
-  if (await areFriends(me, otherId))
+  if (existing) {
+    return existing;
+  }
+
+  if (await areFriends(me, otherId)) {
     return findOrCreateConversation(me, otherId);
+  }
 
   throw new HttpError(403, "You need to send a message request first.", {
     code: "REQUEST_REQUIRED",
@@ -219,7 +345,9 @@ const deleteConversation = async (me, conversationIdRaw) => {
   const conv = await getParticipantConversation(conversationIdRaw, me);
   const field = getMyDeletionField(conv, me);
 
-  await conv.update({ [field]: new Date() });
+  await conv.update({
+    [field]: new Date(),
+  });
 
   return {
     success: true,
@@ -229,7 +357,9 @@ const deleteConversation = async (me, conversationIdRaw) => {
 
 const listConversations = async (me) => {
   const allConvs = await Conversation.findAll({
-    where: { [Op.or]: [{ user1Id: me }, { user2Id: me }] },
+    where: {
+      [Op.or]: [{ user1Id: me }, { user2Id: me }],
+    },
     order: [
       ["lastMessageAt", "DESC NULLS LAST"],
       ["id", "DESC"],
@@ -237,24 +367,35 @@ const listConversations = async (me) => {
     limit: 200,
   });
 
-  // Hide conversations deleted by this user.
-const convs = allConvs.filter((c) => {
-  const deletedAt = getMyDeletionTimestamp(c, me);
+  const blockedUserIds = await getBlockedUserIds(me);
 
-  // Show it again only if a newer message has arrived.
-  return (
-    !deletedAt ||
-    (c.lastMessageAt && new Date(c.lastMessageAt) > new Date(deletedAt))
-  );
-});
+  // Hide blocked users and conversations deleted by this user.
+  const convs = allConvs.filter((c) => {
+    const otherId = otherParticipantId(c, me);
+
+    if (blockedUserIds.has(String(otherId))) {
+      return false;
+    }
+
+    const deletedAt = getMyDeletionTimestamp(c, me);
+
+    // Show it again only if a newer message has arrived.
+    return (
+      !deletedAt ||
+      (c.lastMessageAt && new Date(c.lastMessageAt) > new Date(deletedAt))
+    );
+  });
+
   const otherIds = convs.map((c) => otherParticipantId(c, me));
+
   const users = otherIds.length
     ? await User.findAll({
         where: { id: otherIds },
         attributes: USER_ATTRIBUTES,
       })
     : [];
-  const userMap = new Map(users.map((u) => [u.id, u]));
+
+  const userMap = new Map(users.map((u) => [String(u.id), u]));
 
   const lastMessages = await Promise.all(
     convs.map((c) =>
@@ -273,7 +414,11 @@ const convs = allConvs.filter((c) => {
           senderId: { [Op.ne]: me },
           readAt: null,
           ...(getMyDeletionTimestamp(c, me)
-            ? { createdAt: { [Op.gt]: getMyDeletionTimestamp(c, me) } }
+            ? {
+                createdAt: {
+                  [Op.gt]: getMyDeletionTimestamp(c, me),
+                },
+              }
             : {}),
         },
       }),
@@ -282,7 +427,7 @@ const convs = allConvs.filter((c) => {
 
   return convs.map((c, i) => ({
     id: c.id,
-    otherUser: plainUser(userMap.get(otherParticipantId(c, me))),
+    otherUser: plainUser(userMap.get(String(otherParticipantId(c, me)))),
     lastMessage: lastMessages[i] ? toMessageJSON(lastMessages[i]) : null,
     lastMessageAt: c.lastMessageAt,
     unreadCount: unreadCounts[i],
@@ -290,11 +435,16 @@ const convs = allConvs.filter((c) => {
 };
 
 // ---------- messages ----------
+
 const getMessages = async (me, conversationId, { limit, before } = {}) => {
   const conv = await getParticipantConversation(conversationId, me);
 
   let pageSize = Number.parseInt(limit, 10);
-  if (!Number.isInteger(pageSize) || pageSize < 1) pageSize = DEFAULT_PAGE_SIZE;
+
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    pageSize = DEFAULT_PAGE_SIZE;
+  }
+
   pageSize = Math.min(pageSize, MAX_PAGE_SIZE);
 
   const deletionTimestamp = getMyDeletionTimestamp(conv, me);
@@ -305,7 +455,9 @@ const getMessages = async (me, conversationId, { limit, before } = {}) => {
   };
 
   if (before !== undefined && before !== "") {
-    where.id = { [Op.lt]: parseId(before, "cursor") };
+    where.id = {
+      [Op.lt]: parseId(before, "cursor"),
+    };
   }
 
   const rows = await Message.findAll({
@@ -316,10 +468,14 @@ const getMessages = async (me, conversationId, { limit, before } = {}) => {
 
   const hasMore = rows.length > pageSize;
   const page = rows.slice(0, pageSize).reverse();
+
   const other = await requireUser(otherParticipantId(conv, me));
 
   return {
-    conversation: { id: conv.id, otherUser: plainUser(other) },
+    conversation: {
+      id: conv.id,
+      otherUser: plainUser(other),
+    },
     messages: page.map(toMessageJSON),
     hasMore,
   };
@@ -341,14 +497,33 @@ const sendMessage = async (me, conversationId, text) => {
     lastMessageAt: message.createdAt,
   });
 
-  return { conversation: conv, message: toMessageJSON(message) };
+  return {
+    conversation: conv,
+    message: toMessageJSON(message),
+  };
 };
 
 const deleteMessage = async (me, messageIdRaw) => {
   const messageId = parseId(messageIdRaw, "message id");
   const message = await Message.findByPk(messageId);
 
-  if (!message) throw new HttpError(404, "Message not found.");
+  if (!message) {
+    throw new HttpError(404, "Message not found.");
+  }
+
+  const conversation = await Conversation.findByPk(message.conversationId);
+
+  if (
+    !conversation ||
+    (String(conversation.user1Id) !== String(me) &&
+      String(conversation.user2Id) !== String(me))
+  ) {
+    throw new HttpError(404, "Message not found.");
+  }
+
+  const otherId = otherParticipantId(conversation, me);
+
+  await assertNotBlocked(me, otherId);
 
   if (String(message.senderId) !== String(me)) {
     throw new HttpError(403, "You can only delete your own messages.");
@@ -359,8 +534,6 @@ const deleteMessage = async (me, messageIdRaw) => {
     await message.save();
   }
 
-  const conversation = await Conversation.findByPk(message.conversationId);
-
   return {
     conversation,
     message: toMessageJSON(message),
@@ -368,10 +541,15 @@ const deleteMessage = async (me, messageIdRaw) => {
 };
 
 // ---------- message requests ----------
+
 const sendRequest = async (me, receiverIdRaw, text) => {
   const receiverId = parseId(receiverIdRaw, "user id");
-  if (receiverId === me)
+
+  if (receiverId === me) {
     throw new HttpError(400, "You can't message yourself.");
+  }
+
+  await assertNotBlocked(me, receiverId);
 
   const receiver = await requireUser(receiverId);
   const body = cleanText(text);
@@ -438,19 +616,42 @@ const sendRequest = async (me, receiverIdRaw, text) => {
         },
       );
     }
+
     throw err;
   }
 
-  request.sender = await User.findByPk(me, { attributes: USER_ATTRIBUTES });
+  request.sender = await User.findByPk(me, {
+    attributes: USER_ATTRIBUTES,
+  });
+
   request.receiver = receiver;
 
   return toRequestJSON(request);
 };
 
 const listIncomingRequests = async (me) => {
+  const blockedUserIds = await getBlockedUserIds(me);
+  const blockedIds = [...blockedUserIds];
+
   const rows = await MessageRequest.findAll({
-    where: { receiverId: me, status: "pending" },
-    include: [{ model: User, as: "sender", attributes: USER_ATTRIBUTES }],
+    where: {
+      receiverId: me,
+      status: "pending",
+      ...(blockedIds.length
+        ? {
+            senderId: {
+              [Op.notIn]: blockedIds,
+            },
+          }
+        : {}),
+    },
+    include: [
+      {
+        model: User,
+        as: "sender",
+        attributes: USER_ATTRIBUTES,
+      },
+    ],
     order: [["createdAt", "DESC"]],
     limit: 100,
   });
@@ -459,9 +660,27 @@ const listIncomingRequests = async (me) => {
 };
 
 const listOutgoingRequests = async (me) => {
+  const blockedUserIds = await getBlockedUserIds(me);
+  const blockedIds = [...blockedUserIds];
+
   const rows = await MessageRequest.findAll({
-    where: { senderId: me },
-    include: [{ model: User, as: "receiver", attributes: USER_ATTRIBUTES }],
+    where: {
+      senderId: me,
+      ...(blockedIds.length
+        ? {
+            receiverId: {
+              [Op.notIn]: blockedIds,
+            },
+          }
+        : {}),
+    },
+    include: [
+      {
+        model: User,
+        as: "receiver",
+        attributes: USER_ATTRIBUTES,
+      },
+    ],
     order: [["createdAt", "DESC"]],
     limit: 50,
   });
@@ -477,10 +696,17 @@ const loadPendingRequestForReceiver = async (me, requestIdRaw, transaction) => {
     lock: transaction ? transaction.LOCK.UPDATE : undefined,
   });
 
-  if (!request) throw new HttpError(404, "Message request not found.");
-  if (request.receiverId !== me) throw new HttpError(403, "Not allowed.");
-  if (request.status !== "pending")
+  if (!request) {
+    throw new HttpError(404, "Message request not found.");
+  }
+
+  if (String(request.receiverId) !== String(me)) {
+    throw new HttpError(403, "Not allowed.");
+  }
+
+  if (request.status !== "pending") {
     throw new HttpError(409, "Request already handled.");
+  }
 
   return request;
 };
@@ -488,6 +714,9 @@ const loadPendingRequestForReceiver = async (me, requestIdRaw, transaction) => {
 const acceptRequest = async (me, requestIdRaw) =>
   db.sequelize.transaction(async (t) => {
     const request = await loadPendingRequestForReceiver(me, requestIdRaw, t);
+
+    await assertNotBlocked(request.senderId, request.receiverId, t);
+
     const conversation = await findOrCreateConversation(
       request.senderId,
       request.receiverId,
@@ -509,7 +738,9 @@ const acceptRequest = async (me, requestIdRaw) =>
 
     if (!last || last < message.createdAt) {
       await conversation.update(
-        { lastMessageAt: message.createdAt },
+        {
+          lastMessageAt: message.createdAt,
+        },
         { transaction: t },
       );
     }
@@ -533,32 +764,48 @@ const acceptRequest = async (me, requestIdRaw) =>
 const declineRequest = async (me, requestIdRaw) =>
   db.sequelize.transaction(async (t) => {
     const request = await loadPendingRequestForReceiver(me, requestIdRaw, t);
+
+    await assertNotBlocked(request.senderId, request.receiverId, t);
+
     await request.update(
-      { status: "declined", respondedAt: new Date() },
+      {
+        status: "declined",
+        respondedAt: new Date(),
+      },
       { transaction: t },
     );
+
     return toRequestJSON(request);
   });
 
 const markConversationRead = async (me, conversationId) => {
   const conv = await getParticipantConversation(conversationId, me);
+
   const deletionTimestamp = getMyDeletionTimestamp(conv, me);
 
   await Message.update(
-    { readAt: new Date() },
+    {
+      readAt: new Date(),
+    },
     {
       where: {
         conversationId: conv.id,
         senderId: { [Op.ne]: me },
         readAt: null,
         ...(deletionTimestamp
-          ? { createdAt: { [Op.gt]: deletionTimestamp } }
+          ? {
+              createdAt: {
+                [Op.gt]: deletionTimestamp,
+              },
+            }
           : {}),
       },
     },
   );
 
-  return { success: true };
+  return {
+    success: true,
+  };
 };
 
 module.exports = {

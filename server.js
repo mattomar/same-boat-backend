@@ -16,6 +16,8 @@ const notificationRoutes = require("./routes/notfisRoute");
 const messageRoutes = require("./routes/messageRoute");
 const { setupDirectMessages } = require("./socket/dmSocket");
 const authenticateToken = require("./middlewares/auth");
+const blockRoutes = require("./routes/blockRoute");
+
 const db = require("./models"); // ✅ import models
 
 const app = express();
@@ -44,6 +46,7 @@ app.use("/uploads", express.static("uploads"));
 app.use("/posts", postRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/blocks", blockRoutes);
 
 app.get("/protected", authenticateToken, (req, res) => {
   res.json({ user: req.user });

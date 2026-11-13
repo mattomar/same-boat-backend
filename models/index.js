@@ -32,6 +32,7 @@ db.Post = require("./post")(sequelize, DataTypes);
 db.Comment = require("./comment")(sequelize, DataTypes);
 db.FriendRequest = require("./friendRequest")(sequelize, DataTypes);
 db.Notification = require("./notifs")(sequelize, DataTypes);
+db.Block = require("./block")(sequelize, DataTypes);
 require("./directMessaging")(db, sequelize, DataTypes);
 
 // --- Define Associations ---
@@ -100,6 +101,29 @@ db.User.hasMany(db.Notification, {
   foreignKey: "userId",
   as: "notifications",
   onDelete: "CASCADE",
+});
+
+// Block associations
+db.User.hasMany(db.Block, {
+  foreignKey: "blockerId",
+  as: "blocksMade",
+  onDelete: "CASCADE",
+});
+
+db.User.hasMany(db.Block, {
+  foreignKey: "blockedUserId",
+  as: "blocksReceived",
+  onDelete: "CASCADE",
+});
+
+db.Block.belongsTo(db.User, {
+  foreignKey: "blockerId",
+  as: "blocker",
+});
+
+db.Block.belongsTo(db.User, {
+  foreignKey: "blockedUserId",
+  as: "blockedUser",
 });
 
 db.Notification.belongsTo(db.User, {
