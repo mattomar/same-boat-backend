@@ -142,24 +142,19 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
   }
 });
 
-// GET comments (nested)
+// GET comments with unlimited nested replies
 router.get("/:postId/comments", async (req, res) => {
   try {
-    const { postId } = req.params;
-    const comments = await Comment.findAll({
-      where: { postId, parentId: null },
+    const postId = Number(req.params.postId);
+
+    if (!Number.isInteger(postId) || postId <= 0) {
+      return res.status(400).json({ message: "Invalid post ID" });
+    }
+
+    // Fetch every comment belonging to this post.
+    const allComments = await Comment.findAll({
+      where: { postId },
       include: [
-        {
-          model: Comment,
-          as: "replies",
-          include: [
-            {
-              model: User,
-              as: "user",
-              attributes: ["id", "username"],
-            },
-          ],
-        },
         {
           model: User,
           as: "user",
@@ -168,7 +163,38 @@ router.get("/:postId/comments", async (req, res) => {
       ],
       order: [["createdAt", "DESC"]],
     });
-    res.status(200).json(comments);
+
+    // Create a map containing every comment.
+    const commentMap = {};
+
+    allComments.forEach((comment) => {
+      const commentData = comment.toJSON();
+
+      commentData.replies = [];
+
+      commentMap[commentData.id] = commentData;
+    });
+
+    // Build the nested comment structure.
+    const topLevelComments = [];
+
+    allComments.forEach((comment) => {
+      const commentData = commentMap[comment.id];
+
+      if (commentData.parentId !== null) {
+        const parentComment = commentMap[commentData.parentId];
+
+        if (parentComment) {
+          parentComment.replies.push(commentData);
+        } else {
+          topLevelComments.push(commentData);
+        }
+      } else {
+        topLevelComments.push(commentData);
+      }
+    });
+
+    res.status(200).json(topLevelComments);
   } catch (err) {
     console.error("Fetch comments error:", err);
     res.status(500).json({ error: "Internal server error" });
