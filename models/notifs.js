@@ -31,6 +31,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       defaultValue: false,
     },
+    commentId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
   });
 
   return Notification;

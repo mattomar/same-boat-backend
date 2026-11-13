@@ -115,7 +115,37 @@ router.get("/categories", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-// POST a comment (or reply)
+
+// GET a single post by ID
+router.get("/:postId", async (req, res) => {
+  try {
+    const postId = Number(req.params.postId);
+
+    if (!Number.isInteger(postId) || postId <= 0) {
+      return res.status(400).json({ message: "Invalid post ID" });
+    }
+
+    const post = await Post.findByPk(postId, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "username"],
+        },
+      ],
+    });
+
+    if (!post) {
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    res.status(200).json(post);
+  } catch (error) {
+    console.error("Fetch single post error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // POST a comment or reply + notify mentioned users
 router.post("/:postId/comments", authenticateToken, async (req, res) => {
   try {
@@ -187,6 +217,7 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
           message: `${sender.username} commented on your post`,
           senderId: userId,
           postId,
+          commentId: comment.id,
         });
       } catch (notificationError) {
         console.error("Comment notification error:", notificationError);
@@ -228,6 +259,8 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
           message: `${sender.username} mentioned you in a comment`,
           senderId: userId,
           postId,
+
+          commentId: comment.id,
         });
       }
     } catch (notificationError) {
