@@ -46,6 +46,21 @@ module.exports = (sequelize, DataTypes) => {
         is: /^[a-zA-Z0-9_.-]*$/i,
       },
     },
+
+    // ACCOUNT MODERATION
+    isBanned: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    banReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    bannedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
   });
 
   User.associate = (models) => {

@@ -1,7 +1,6 @@
 const { Sequelize, DataTypes } = require("sequelize");
 require("dotenv").config();
 
-
 const sequelize = new Sequelize(
   process.env.DB_NAME,
   process.env.DB_USER,
@@ -11,12 +10,13 @@ const sequelize = new Sequelize(
     port: process.env.DB_PORT,
     dialect: "postgres",
     dialectOptions: {
-      ssl: process.env.DB_SSL === "true"
-        ? { require: true, rejectUnauthorized: false }
-        : false,
+      ssl:
+        process.env.DB_SSL === "true"
+          ? { require: true, rejectUnauthorized: false }
+          : false,
     },
     logging: false,
-  }
+  },
 );
 
 const db = {};
@@ -33,6 +33,8 @@ db.Comment = require("./comment")(sequelize, DataTypes);
 db.FriendRequest = require("./friendRequest")(sequelize, DataTypes);
 db.Notification = require("./notifs")(sequelize, DataTypes);
 db.Block = require("./block")(sequelize, DataTypes);
+db.Report = require("./report")(sequelize, DataTypes);
+db.ModerationLog = require("./moderationLog")(sequelize, DataTypes);
 require("./directMessaging")(db, sequelize, DataTypes);
 
 // --- Define Associations ---
@@ -129,6 +131,69 @@ db.Block.belongsTo(db.User, {
 db.Notification.belongsTo(db.User, {
   foreignKey: "userId",
   as: "user",
+});
+// REPORT ASSOCIATIONS
+db.User.hasMany(db.Report, {
+  foreignKey: "reporterId",
+  as: "submittedReports",
+  onDelete: "CASCADE",
+});
+
+db.Report.belongsTo(db.User, {
+  foreignKey: "reporterId",
+  as: "reporter",
+});
+
+db.User.hasMany(db.Report, {
+  foreignKey: "reportedUserId",
+  as: "receivedReports",
+});
+
+db.Report.belongsTo(db.User, {
+  foreignKey: "reportedUserId",
+  as: "reportedUser",
+});
+
+db.User.hasMany(db.Report, {
+  foreignKey: "reviewedBy",
+  as: "reviewedReports",
+});
+
+db.Report.belongsTo(db.User, {
+  foreignKey: "reviewedBy",
+  as: "reviewer",
+});
+
+// MODERATION LOG ASSOCIATIONS
+
+db.User.hasMany(db.ModerationLog, {
+  foreignKey: "adminId",
+  as: "moderationActions",
+});
+
+db.ModerationLog.belongsTo(db.User, {
+  foreignKey: "adminId",
+  as: "admin",
+});
+
+db.User.hasMany(db.ModerationLog, {
+  foreignKey: "targetUserId",
+  as: "moderationHistory",
+});
+
+db.ModerationLog.belongsTo(db.User, {
+  foreignKey: "targetUserId",
+  as: "targetUser",
+});
+
+db.Report.hasMany(db.ModerationLog, {
+  foreignKey: "reportId",
+  as: "moderationLogs",
+});
+
+db.ModerationLog.belongsTo(db.Report, {
+  foreignKey: "reportId",
+  as: "report",
 });
 
 module.exports = db;

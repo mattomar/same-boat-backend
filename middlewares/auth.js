@@ -1,25 +1,50 @@
 const jwt = require("jsonwebtoken");
-const { User } = require("../models");
+const { User, Role } = require("../models");
 
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1]; // Bearer <token>
-  console.log("🔐 Incoming token:", token);
+  const token = authHeader && authHeader.split(" ")[1];
 
-
-  if (!token) return res.sendStatus(401); // Unauthorized
+  if (!token) {
+    return res.sendStatus(401);
+  }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findByPk(decoded.userId);
 
-    if (!user) return res.status(404).json({ error: "User not found" });
+    const user = await User.findByPk(decoded.userId, {
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["id", "name"],
+        },
+      ],
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        error: "User not found",
+      });
+    }
+
+    // BLOCK BANNED USERS
+    if (user.isBanned) {
+      return res.status(403).json({
+        error: "Your account has been banned",
+        banned: true,
+        reason: user.banReason,
+      });
+    }
 
     req.user = user;
     next();
   } catch (err) {
     console.error("Token error:", err);
-    return res.status(403).json({ error: "Invalid token" }); // Forbidden
+
+    return res.status(403).json({
+      error: "Invalid token",
+    });
   }
 };
 
