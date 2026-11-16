@@ -21,7 +21,6 @@ const optionalAuth = require("../middlewares/optionalAuth");
 // HELPERS
 // --------------------------------------------------
 
-// Check whether either user has blocked the other.
 const isBlocked = async (userA, userB) => {
   if (!userA || !userB || String(userA) === String(userB)) {
     return false;
@@ -30,14 +29,8 @@ const isBlocked = async (userA, userB) => {
   const block = await Block.findOne({
     where: {
       [Op.or]: [
-        {
-          blockerId: userA,
-          blockedUserId: userB,
-        },
-        {
-          blockerId: userB,
-          blockedUserId: userA,
-        },
+        { blockerId: userA, blockedUserId: userB },
+        { blockerId: userB, blockedUserId: userA },
       ],
     },
   });
@@ -45,7 +38,6 @@ const isBlocked = async (userA, userB) => {
   return Boolean(block);
 };
 
-// Get everyone blocked by or blocking this user.
 const getBlockedUserIds = async (userId) => {
   const blocks = await Block.findAll({
     where: {
@@ -69,6 +61,16 @@ const getBlockedUserIds = async (userId) => {
   return blockedIds;
 };
 
+// Get IDs of banned accounts.
+const getBannedUserIds = async () => {
+  const bannedUsers = await User.findAll({
+    where: { isBanned: true },
+    attributes: ["id"],
+  });
+
+  return bannedUsers.map((user) => Number(user.id));
+};
+
 // --------------------------------------------------
 // CLOUDINARY UPLOAD
 // --------------------------------------------------
@@ -86,14 +88,9 @@ const uploadToCloudinary = (buffer, resourceType) => {
       { resource_type: resourceType },
       (error, result) => {
         if (error) {
-          console.error(`❌ Cloudinary ${resourceType} upload error:`, error);
+          console.error(`Cloudinary ${resourceType} upload error:`, error);
           return reject(error);
         }
-
-        console.log(
-          `✅ Cloudinary ${resourceType} uploaded:`,
-          result.secure_url,
-        );
 
         resolve(result.secure_url);
       },
@@ -105,12 +102,10 @@ const uploadToCloudinary = (buffer, resourceType) => {
 
 // --------------------------------------------------
 // TEST ROUTE
-// Keep this before /:postId so "test" isn't treated
-// as a post ID.
 // --------------------------------------------------
 
 router.get("/test", (req, res) => {
-  res.send("✅ Post route works");
+  res.send("Post route works");
 });
 
 // --------------------------------------------------
@@ -120,30 +115,24 @@ router.get("/test", (req, res) => {
 router.post(
   "/createPost",
   (req, res, next) => {
-    console.log("📨 Hit /posts/createPost route");
+    console.log("Hit /posts/createPost route");
     next();
   },
   authenticateToken,
   upload.single("photo"),
   async (req, res) => {
     try {
-      console.log("🧠 req.user in /posts:", req.user);
-
       const { content, categoryId, gifUrl, youtubeUrl } = req.body;
       const userId = req.user.id;
 
       const category = await Category.findByPk(categoryId);
 
       if (!category) {
-        return res.status(400).json({
-          message: "Invalid category",
-        });
+        return res.status(400).json({ message: "Invalid category" });
       }
 
-      const photo = req.file;
-
-      const photoUrl = photo
-        ? await uploadToCloudinary(photo.buffer, "image")
+      const photoUrl = req.file
+        ? await uploadToCloudinary(req.file.buffer, "image")
         : null;
 
       const post = await Post.create({
@@ -165,11 +154,10 @@ router.post(
         ],
       });
 
-      res.status(201).json(createdPost);
+      return res.status(201).json(createdPost);
     } catch (error) {
       console.error("Create post error:", error);
-
-      res.status(500).json({
+      return res.status(500).json({
         message: "Internal server error",
       });
     }
@@ -192,13 +180,21 @@ router.get("/category/:categoryId", optionalAuth, async (req, res) => {
 
     const where = { categoryId };
 
-    // Filter blocked users only for logged-in visitors.
+    // Always hide posts belonging to banned accounts.
+    const bannedIds = await getBannedUserIds();
+
+    if (bannedIds.length > 0) {
+      where.userId = { [Op.notIn]: bannedIds };
+    }
+
+    // Also hide blocked accounts for logged-in visitors.
     if (req.user) {
       const blockedIds = await getBlockedUserIds(req.user.id);
 
       if (blockedIds.size > 0) {
         where.userId = {
-          [Op.notIn]: [...blockedIds],
+          ...(where.userId || {}),
+          [Op.notIn]: [...new Set([...bannedIds, ...blockedIds])],
         };
       }
     }
@@ -215,11 +211,10 @@ router.get("/category/:categoryId", optionalAuth, async (req, res) => {
       order: [["createdAt", "DESC"]],
     });
 
-    res.json(posts);
+    return res.json(posts);
   } catch (error) {
     console.error("Fetch posts error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal server error",
     });
   }
@@ -232,12 +227,10 @@ router.get("/category/:categoryId", optionalAuth, async (req, res) => {
 router.get("/categories", async (req, res) => {
   try {
     const categories = await Category.findAll();
-
-    res.status(200).json(categories);
+    return res.status(200).json(categories);
   } catch (error) {
     console.error("Fetch categories error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal server error",
     });
   }
@@ -262,29 +255,27 @@ router.get("/:postId", optionalAuth, async (req, res) => {
         {
           model: User,
           as: "user",
-          attributes: ["id", "username"],
+          attributes: ["id", "username", "isBanned"],
         },
       ],
     });
 
-    if (!post) {
+    if (!post || post.user?.isBanned) {
       return res.status(404).json({
         message: "Post not found",
       });
     }
 
-    // Hide the post if either user has blocked the other.
     if (req.user && (await isBlocked(req.user.id, post.userId))) {
       return res.status(404).json({
         message: "Post not found",
       });
     }
 
-    res.status(200).json(post);
+    return res.status(200).json(post);
   } catch (error) {
     console.error("Fetch single post error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal server error",
     });
   }
@@ -312,23 +303,28 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
       });
     }
 
-    const post = await Post.findByPk(postId);
+    const post = await Post.findByPk(postId, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "isBanned"],
+        },
+      ],
+    });
 
-    if (!post) {
+    if (!post || post.user?.isBanned) {
       return res.status(404).json({
         message: "Post not found",
       });
     }
 
-    // Don't allow interaction with a user's post
-    // if either person has blocked the other.
     if (await isBlocked(userId, post.userId)) {
       return res.status(404).json({
         message: "Post not found",
       });
     }
 
-    // Validate parent comment.
     let validParentId = null;
 
     if (parentId !== undefined && parentId !== null) {
@@ -345,15 +341,21 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
           id: parsedParentId,
           postId,
         },
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: ["id", "isBanned"],
+          },
+        ],
       });
 
-      if (!parentComment) {
+      if (!parentComment || parentComment.user?.isBanned) {
         return res.status(404).json({
           message: "Parent comment not found",
         });
       }
 
-      // Don't allow replying to someone involved in a block.
       if (await isBlocked(userId, parentComment.userId)) {
         return res.status(404).json({
           message: "Parent comment not found",
@@ -363,7 +365,6 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
       validParentId = parsedParentId;
     }
 
-    // Create comment.
     const comment = await Comment.create({
       content: content.trim(),
       userId,
@@ -371,12 +372,10 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
       parentId: validParentId,
     });
 
-    // Get sender information.
     const sender = await User.findByPk(userId, {
       attributes: ["id", "username"],
     });
 
-    // Notify post owner.
     if (String(post.userId) !== String(userId)) {
       try {
         await Notification.create({
@@ -392,15 +391,12 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
       }
     }
 
-    // Find all @mentions.
     const mentions = content.match(/@([A-Za-z0-9_.-]+)/g) || [];
 
-    // Remove duplicate usernames.
     const uniqueUsernames = [
       ...new Set(mentions.map((mention) => mention.substring(1).toLowerCase())),
     ];
 
-    // Create mention notifications.
     try {
       for (const username of uniqueUsernames) {
         const mentionedUser = await User.findOne({
@@ -408,15 +404,14 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
             username: {
               [Op.iLike]: username,
             },
+            isBanned: false,
           },
         });
 
-        // Skip nonexistent users and self-mentions.
         if (!mentionedUser || String(mentionedUser.id) === String(userId)) {
           continue;
         }
 
-        // Don't send mention notifications across a block.
         if (await isBlocked(userId, mentionedUser.id)) {
           continue;
         }
@@ -434,11 +429,10 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
       console.error("Mention notification error:", notificationError);
     }
 
-    res.status(201).json(comment);
+    return res.status(201).json(comment);
   } catch (error) {
     console.error("Create comment error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       error: "Internal server error",
     });
   }
@@ -458,56 +452,61 @@ router.get("/:postId/comments", optionalAuth, async (req, res) => {
       });
     }
 
-    const post = await Post.findByPk(postId);
+    const post = await Post.findByPk(postId, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "isBanned"],
+        },
+      ],
+    });
 
-    if (!post) {
+    if (!post || post.user?.isBanned) {
       return res.status(404).json({
         message: "Post not found",
       });
     }
 
-    // If the visitor and post owner have blocked each other,
-    // don't expose the comments either.
     if (req.user && (await isBlocked(req.user.id, post.userId))) {
       return res.status(404).json({
         message: "Post not found",
       });
     }
 
+    const bannedIds = await getBannedUserIds();
+
     const blockedIds = req.user
       ? await getBlockedUserIds(req.user.id)
       : new Set();
 
-    // Fetch every comment belonging to this post.
+    const hiddenIds = new Set([...bannedIds, ...blockedIds]);
+
     const allComments = await Comment.findAll({
       where: { postId },
       include: [
         {
           model: User,
           as: "user",
-          attributes: ["id", "username"],
+          attributes: ["id", "username", "isBanned"],
         },
       ],
       order: [["createdAt", "DESC"]],
     });
 
-    // Remove comments written by blocked users.
     const visibleComments = allComments.filter(
-      (comment) => !blockedIds.has(Number(comment.userId)),
+      (comment) =>
+        !hiddenIds.has(Number(comment.userId)) && !comment.user?.isBanned,
     );
 
-    // Create a map containing visible comments.
     const commentMap = {};
 
     visibleComments.forEach((comment) => {
       const commentData = comment.toJSON();
-
       commentData.replies = [];
-
       commentMap[commentData.id] = commentData;
     });
 
-    // Build the nested comment structure.
     const topLevelComments = [];
 
     visibleComments.forEach((comment) => {
@@ -519,8 +518,6 @@ router.get("/:postId/comments", optionalAuth, async (req, res) => {
         if (parentComment) {
           parentComment.replies.push(commentData);
         } else {
-          // If the parent was hidden, show the visible reply
-          // as a top-level comment.
           topLevelComments.push(commentData);
         }
       } else {
@@ -528,11 +525,10 @@ router.get("/:postId/comments", optionalAuth, async (req, res) => {
       }
     });
 
-    res.status(200).json(topLevelComments);
+    return res.status(200).json(topLevelComments);
   } catch (error) {
     console.error("Fetch comments error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       error: "Internal server error",
     });
   }
@@ -584,7 +580,6 @@ router.delete("/comments/:commentId", authenticateToken, async (req, res) => {
     }
 
     const isCommentOwner = String(comment.userId) === String(userId);
-
     const isPostOwner = String(post.userId) === String(userId);
 
     if (!isCommentOwner && !isPostOwner) {
@@ -595,13 +590,12 @@ router.delete("/comments/:commentId", authenticateToken, async (req, res) => {
 
     await deleteCommentWithReplies(comment.id);
 
-    res.status(200).json({
+    return res.status(200).json({
       message: "Comment and its replies deleted successfully",
     });
   } catch (error) {
     console.error("Delete comment error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal server error",
     });
   }
@@ -636,7 +630,6 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
       });
     }
 
-    // Find all top-level comments.
     const comments = await Comment.findAll({
       where: {
         postId: post.id,
@@ -644,20 +637,18 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
       },
     });
 
-    // Delete each comment and its nested replies.
     for (const comment of comments) {
       await deleteCommentWithReplies(comment.id);
     }
 
     await post.destroy();
 
-    res.status(200).json({
+    return res.status(200).json({
       message: "Post and its comments deleted successfully",
     });
   } catch (error) {
     console.error("Delete post error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal server error",
     });
   }
@@ -677,8 +668,16 @@ router.get("/user/:userId", optionalAuth, async (req, res) => {
       });
     }
 
-    // Hide this user's posts if either person has blocked
-    // the other. Logged-out visitors remain unaffected.
+    const targetUser = await User.findByPk(userId, {
+      attributes: ["id", "isBanned"],
+    });
+
+    if (!targetUser || targetUser.isBanned) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
     if (req.user && (await isBlocked(req.user.id, userId))) {
       return res.status(404).json({
         message: "User not found",
@@ -686,7 +685,9 @@ router.get("/user/:userId", optionalAuth, async (req, res) => {
     }
 
     const posts = await Post.findAll({
-      where: { userId },
+      where: {
+        userId,
+      },
       include: [
         {
           model: User,
@@ -697,11 +698,10 @@ router.get("/user/:userId", optionalAuth, async (req, res) => {
       order: [["createdAt", "DESC"]],
     });
 
-    res.status(200).json(posts);
+    return res.status(200).json(posts);
   } catch (error) {
     console.error("Fetch user posts error:", error);
-
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal server error",
     });
   }
