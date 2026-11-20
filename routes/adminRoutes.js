@@ -633,4 +633,182 @@ router.get(
   },
 );
 
+
+// GET MODERATION APPEALS
+router.get("/appeals", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { status = "pending" } = req.query;
+
+    const where = {};
+
+    if (["pending", "accepted", "rejected"].includes(status)) {
+      where.status = status;
+    }
+
+    const appeals = await db.ModerationAppeal.findAll({
+      where,
+      include: [
+        {
+          model: db.User,
+          as: "user",
+          attributes: ["id", "username", "email"],
+        },
+        {
+          model: db.User,
+          as: "reviewer",
+          attributes: ["id", "username"],
+        },
+        {
+          model: db.ModerationLog,
+          as: "moderationAction",
+          attributes: [
+            "id",
+            "action",
+            "targetType",
+            "targetId",
+            "reason",
+            "createdAt",
+          ],
+        },
+      ],
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.json(appeals);
+  } catch (error) {
+    console.error("Get admin appeals error:", error);
+
+    return res.status(500).json({
+      error: "Failed to retrieve moderation appeals",
+    });
+  }
+});
+
+
+// REVIEW MODERATION APPEAL
+router.patch(
+  "/appeals/:appealId/review",
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    const transaction = await db.sequelize.transaction();
+
+    try {
+      const appealId = Number(req.params.appealId);
+      const { status, adminResponse } = req.body;
+
+      if (!Number.isInteger(appealId) || appealId <= 0) {
+        await transaction.rollback();
+        return res.status(400).json({ error: "Invalid appeal ID" });
+      }
+
+      if (!["accepted", "rejected"].includes(status)) {
+        await transaction.rollback();
+        return res.status(400).json({
+          error: "Decision must be accepted or rejected",
+        });
+      }
+
+      if (
+        typeof adminResponse !== "string" ||
+        !adminResponse.trim()
+      ) {
+        await transaction.rollback();
+        return res.status(400).json({
+          error: "An admin response is required",
+        });
+      }
+
+      if (adminResponse.trim().length > 3000) {
+        await transaction.rollback();
+        return res.status(400).json({
+          error: "Admin response cannot exceed 3000 characters",
+        });
+      }
+
+      const appeal = await db.ModerationAppeal.findByPk(appealId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (!appeal) {
+        await transaction.rollback();
+        return res.status(404).json({ error: "Appeal not found" });
+      }
+
+      if (appeal.status !== "pending") {
+        await transaction.rollback();
+        return res.status(409).json({
+          error: "This appeal has already been reviewed",
+        });
+      }
+
+      appeal.status = status;
+      appeal.reviewedBy = req.user.id;
+      appeal.reviewedAt = new Date();
+      appeal.adminResponse = adminResponse.trim();
+
+      await appeal.save({ transaction });
+      if (status === "accepted") {
+        const log = await db.ModerationLog.findByPk(appeal.moderationLogId, {
+          transaction,
+        });
+
+        if (log && log.action === "ban_user") {
+          await db.User.update(
+            { isBanned: false, banReason: null },
+            { where: { id: appeal.userId }, transaction },
+          );
+        }
+      }
+
+      // Record the admin's decision in the existing moderation log
+      await db.ModerationLog.create(
+        {
+          adminId: req.user.id,
+          targetUserId: appeal.userId,
+          targetType: "user",
+          targetId: appeal.userId,
+          action: "review_appeal",
+          reason: adminResponse.trim(),
+        },
+        { transaction }
+      );
+
+      // Notify the user of the appeal decision
+      await db.Notification.create(
+        {
+          userId: appeal.userId,
+          senderId: req.user.id,
+          type: "moderation_appeal",
+          message:
+            status === "accepted"
+              ? "Your moderation appeal has been accepted."
+              : "Your moderation appeal has been rejected.",
+          isRead: false,
+          handled: true,
+        },
+        { transaction }
+      );
+
+      await transaction.commit();
+
+      return res.json({
+        success: true,
+        message: "Appeal reviewed successfully",
+        appeal,
+      });
+    } catch (error) {
+      await transaction.rollback();
+
+      console.error("Review moderation appeal error:", error);
+
+      return res.status(500).json({
+        error: "Failed to review appeal",
+      });
+    }
+  }
+);
+
+
 module.exports = router;

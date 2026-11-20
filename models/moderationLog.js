@@ -40,6 +40,7 @@ module.exports = (sequelize, DataTypes) => {
           "remove_content",
           "dismiss_report",
           "review_report",
+          "review_appeal",
         ),
         allowNull: false,
       },

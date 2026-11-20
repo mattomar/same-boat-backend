@@ -49,9 +49,12 @@ router.post("/signup", upload.single("avatar"), async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const userRole = await Role.findOne({ where: { name: "Member" } });
+    const userRole = await Role.findOne({
+      where: { name: "Member" },
+    });
 
     let avatarUrl = null;
+
     if (req.file) {
       avatarUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
     }
@@ -96,41 +99,55 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({
+      where: { email },
+    });
 
     if (!user) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    // Reject banned accounts before issuing a JWT.
-    if (user.isBanned) {
-      return res.status(403).json({
-        message: "Your account has been banned.",
-        banned: true,
-        reason: user.banReason || null,
-        bannedAt: user.bannedAt || null,
+      return res.status(401).json({
+        message: "Invalid email or password",
       });
     }
 
+    // Issue a token even for banned users.
+    // The authentication middleware restricts what they can access.
     const token = jwt.sign(
-      { userId: user.id, email: user.email, roleId: user.roleId },
+      {
+        userId: user.id,
+        email: user.email,
+        roleId: user.roleId,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "7d" },
     );
 
     return res.status(200).json({
-      message: "Login successful",
+      message: user.isBanned
+        ? "Account banned. You may submit an appeal."
+        : "Login successful",
       token,
+      banned: Boolean(user.isBanned),
+      reason: user.banReason || null,
+      bannedAt: user.bannedAt || null,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+      },
     });
   } catch (error) {
     console.error("Login Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({
+      message: "Internal server error",
+    });
   }
 });
 

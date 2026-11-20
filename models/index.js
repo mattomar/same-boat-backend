@@ -35,6 +35,7 @@ db.Notification = require("./notifs")(sequelize, DataTypes);
 db.Block = require("./block")(sequelize, DataTypes);
 db.Report = require("./report")(sequelize, DataTypes);
 db.ModerationLog = require("./moderationLog")(sequelize, DataTypes);
+db.ModerationAppeal = require("./moderationAppeal")(sequelize, DataTypes);
 require("./directMessaging")(db, sequelize, DataTypes);
 
 // --- Define Associations ---
@@ -194,6 +195,40 @@ db.Report.hasMany(db.ModerationLog, {
 db.ModerationLog.belongsTo(db.Report, {
   foreignKey: "reportId",
   as: "report",
+});
+
+// MODERATION APPEAL ASSOCIATIONS
+
+db.User.hasMany(db.ModerationAppeal, {
+  foreignKey: "userId",
+  as: "moderationAppeals",
+  onDelete: "CASCADE",
+});
+
+db.ModerationAppeal.belongsTo(db.User, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+db.User.hasMany(db.ModerationAppeal, {
+  foreignKey: "reviewedBy",
+  as: "reviewedAppeals",
+});
+
+db.ModerationAppeal.belongsTo(db.User, {
+  foreignKey: "reviewedBy",
+  as: "reviewer",
+});
+
+db.ModerationLog.hasOne(db.ModerationAppeal, {
+  foreignKey: "moderationLogId",
+  as: "appeal",
+  onDelete: "CASCADE",
+});
+
+db.ModerationAppeal.belongsTo(db.ModerationLog, {
+  foreignKey: "moderationLogId",
+  as: "moderationAction",
 });
 
 module.exports = db;

@@ -7,9 +7,10 @@ const jwt = require("jsonwebtoken");
 const db = require("../models");
 const adminRoutes = require("../routes/adminRoutes");
 const reportRoutes = require("../routes/reportRoutes");
+const moderationAppealRoutes = require("../routes/moderationAppealRoutes");
 const authenticateToken = require("../middlewares/auth");
 
-describe("Admin ban, unban, and reporting system", () => {
+describe("Admin ban, unban, reporting, and appeals system", () => {
   let server;
   let baseUrl;
 
@@ -117,6 +118,7 @@ describe("Admin ban, unban, and reporting system", () => {
 
     app.use("/api/admin", adminRoutes);
     app.use("/api/reports", reportRoutes);
+    app.use("/api/moderation-appeals", moderationAppealRoutes);
 
     app.get("/protected", authenticateToken, (req, res) => {
       res.status(200).json({
@@ -138,6 +140,41 @@ describe("Admin ban, unban, and reporting system", () => {
     if (server?.listening) {
       await new Promise((resolve) => server.close(resolve));
     }
+
+    // Remove appeals before their moderation logs.
+    await db.ModerationAppeal.destroy({
+      where: {
+        [db.Sequelize.Op.or]: [
+          { userId: testUser?.id },
+          { userId: reportedUser?.id },
+          { reviewedBy: admin?.id },
+        ],
+      },
+    });
+
+    // Remove moderation logs before reports and users.
+    await db.ModerationLog.destroy({
+      where: {
+        [db.Sequelize.Op.or]: [
+          { adminId: admin?.id },
+          { targetUserId: testUser?.id },
+          { targetUserId: reportedUser?.id },
+        ],
+      },
+    });
+
+    // Remove notifications created for test users.
+    await db.Notification.destroy({
+      where: {
+        userId: {
+          [db.Sequelize.Op.in]: [
+            admin?.id,
+            testUser?.id,
+            reportedUser?.id,
+          ].filter(Boolean),
+        },
+      },
+    });
 
     // Delete all reports created by the test user.
     await db.Report.destroy({
@@ -685,5 +722,351 @@ describe("Admin ban, unban, and reporting system", () => {
     expect(savedUserReport).toBeTruthy();
     expect(savedUserReport.status).toBe("actioned");
     expect(savedUserReport.reportedUserId).toBe(reportedUser.id);
+  });
+
+  // ==========================================
+  // MODERATION APPEAL TESTS
+  // ==========================================
+
+  test("user can submit an appeal against a moderation action", async () => {
+    // Create a moderation action for the test user.
+    const moderationLog = await db.ModerationLog.create({
+      adminId: admin.id,
+      targetUserId: testUser.id,
+      targetType: "user",
+      targetId: testUser.id,
+      action: "ban_user",
+      reason: "Testing moderation appeal.",
+    });
+
+    // Ban the user so the appeal route is tested while banned.
+    await testUser.update({
+      isBanned: true,
+      banReason: "Testing moderation appeal.",
+      bannedAt: new Date(),
+    });
+
+    // A banned user should still be able to access appeal routes.
+    let result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: moderationLog.id,
+      explanation: "I believe this moderation action was applied incorrectly.",
+    });
+
+    expect(result.status).toBe(201);
+    expect(result.data.success).toBe(true);
+
+    const appeal = result.data.appeal;
+
+    expect(appeal.userId).toBe(testUser.id);
+    expect(appeal.moderationLogId).toBe(moderationLog.id);
+    expect(appeal.status).toBe("pending");
+
+    const savedAppeal = await db.ModerationAppeal.findByPk(appeal.id);
+
+    expect(savedAppeal).toBeTruthy();
+    expect(savedAppeal.explanation).toBe(
+      "I believe this moderation action was applied incorrectly.",
+    );
+
+    // User can see their own appeals.
+    result = await api(userToken, "GET", "/api/moderation-appeals/my-appeals");
+    console.log("MY APPEALS RESPONSE:", JSON.stringify(result.data, null, 2));
+    
+
+expect(result.status).toBe(200);
+expect(Array.isArray(result.data)).toBe(true);
+expect(result.data.some((item) => item.id === appeal.id)).toBe(true);
+
+    // A regular user cannot access the admin appeal list.
+    result = await api(userToken, "GET", "/api/admin/appeals");
+
+    expect(result.status).toBe(403);
+
+    // A user cannot submit an appeal for someone else's moderation action.
+    const otherModerationLog = await db.ModerationLog.create({
+      adminId: admin.id,
+      targetUserId: reportedUser.id,
+      targetType: "user",
+      targetId: reportedUser.id,
+      action: "ban_user",
+      reason: "Another user's moderation action.",
+    });
+
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: otherModerationLog.id,
+      explanation: "Trying to appeal someone else's action.",
+    });
+
+    expect(result.status).toBe(404);
+
+    // Duplicate appeals should be rejected.
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: moderationLog.id,
+      explanation: "Submitting a duplicate appeal.",
+    });
+
+    expect(result.status).toBe(409);
+
+    // Empty explanation should be rejected.
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: moderationLog.id,
+      explanation: "   ",
+    });
+
+    expect(result.status).toBe(400);
+
+    // Invalid moderation log ID should be rejected.
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: "invalid",
+      explanation: "Testing invalid ID.",
+    });
+
+    expect(result.status).toBe(400);
+
+    // Nonexistent moderation log should be rejected.
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: 999999999,
+      explanation: "Testing nonexistent moderation action.",
+    });
+
+    expect(result.status).toBe(404);
+
+    // Restore the user after testing the banned-user appeal flow.
+    await testUser.update({
+      isBanned: false,
+      banReason: null,
+      bannedAt: null,
+    });
+  });
+
+  // ==========================================
+  // ADMIN APPEAL REVIEW TESTS
+  // ==========================================
+
+  test("admin can review, accept, and reject moderation appeals", async () => {
+    // Create a moderation action and appeal for acceptance.
+    const acceptedModerationLog = await db.ModerationLog.create({
+      adminId: admin.id,
+      targetUserId: testUser.id,
+      targetType: "user",
+      targetId: testUser.id,
+      action: "ban_user",
+      reason: "Testing accepted appeal.",
+    });
+
+    let result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: acceptedModerationLog.id,
+      explanation: "I would like this ban reviewed.",
+    });
+
+    expect(result.status).toBe(201);
+
+    const acceptedAppeal = result.data.appeal;
+
+    // Admin can view pending appeals.
+    result = await api(adminToken, "GET", "/api/admin/appeals?status=pending");
+    console.log(
+      "ADMIN APPEALS RESPONSE:",
+      JSON.stringify(result.data, null, 2),
+    );
+
+expect(result.status).toBe(200);
+expect(Array.isArray(result.data)).toBe(true);
+expect(result.data.some((item) => item.id === acceptedAppeal.id)).toBe(true);
+
+    // Admin can accept an appeal with a response.
+    result = await api(
+      adminToken,
+      "PATCH",
+      `/api/admin/appeals/${acceptedAppeal.id}/review`,
+      {
+        status: "accepted",
+        adminResponse: "Your appeal has been reviewed and accepted.",
+      },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.data.success).toBe(true);
+    expect(result.data.appeal.status).toBe("accepted");
+
+    const savedAcceptedAppeal = await db.ModerationAppeal.findByPk(
+      acceptedAppeal.id,
+    );
+
+    expect(savedAcceptedAppeal.status).toBe("accepted");
+    expect(savedAcceptedAppeal.reviewedBy).toBe(admin.id);
+    expect(savedAcceptedAppeal.reviewedAt).toBeTruthy();
+    expect(savedAcceptedAppeal.adminResponse).toBe(
+      "Your appeal has been reviewed and accepted.",
+    );
+
+    // The appeal decision should create a moderation log.
+    const acceptanceLog = await db.ModerationLog.findOne({
+      where: {
+        adminId: admin.id,
+        targetUserId: testUser.id,
+        action: "review_appeal",
+      },
+      order: [["createdAt", "DESC"]],
+    });
+
+    expect(acceptanceLog).toBeTruthy();
+
+    // The user should receive a notification.
+    const acceptedNotification = await db.Notification.findOne({
+      where: {
+        userId: testUser.id,
+        type: "moderation_appeal",
+      },
+      order: [["createdAt", "DESC"]],
+    });
+
+    expect(acceptedNotification).toBeTruthy();
+    expect(acceptedNotification.message.toLowerCase()).toContain("accepted");
+
+    // A completed appeal cannot be reviewed a second time.
+    result = await api(
+      adminToken,
+      "PATCH",
+      `/api/admin/appeals/${acceptedAppeal.id}/review`,
+      {
+        status: "rejected",
+        adminResponse: "Trying to review it again.",
+      },
+    );
+
+    expect(result.status).toBe(409);
+
+    // ==========================================
+    // REJECT AN APPEAL
+    // ==========================================
+
+    const rejectedModerationLog = await db.ModerationLog.create({
+      adminId: admin.id,
+      targetUserId: testUser.id,
+      targetType: "user",
+      targetId: testUser.id,
+      action: "ban_user",
+      reason: "Testing rejected appeal.",
+    });
+
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: rejectedModerationLog.id,
+      explanation: "I disagree with this moderation decision.",
+    });
+
+    expect(result.status).toBe(201);
+
+    const rejectedAppeal = result.data.appeal;
+
+    result = await api(
+      adminToken,
+      "PATCH",
+      `/api/admin/appeals/${rejectedAppeal.id}/review`,
+      {
+        status: "rejected",
+        adminResponse: "The original moderation decision will remain.",
+      },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.data.appeal.status).toBe("rejected");
+
+    const savedRejectedAppeal = await db.ModerationAppeal.findByPk(
+      rejectedAppeal.id,
+    );
+
+    expect(savedRejectedAppeal.status).toBe("rejected");
+    expect(savedRejectedAppeal.reviewedBy).toBe(admin.id);
+    expect(savedRejectedAppeal.reviewedAt).toBeTruthy();
+    expect(savedRejectedAppeal.adminResponse).toBe(
+      "The original moderation decision will remain.",
+    );
+
+    const rejectedNotification = await db.Notification.findOne({
+      where: {
+        userId: testUser.id,
+        type: "moderation_appeal",
+        message: {
+          [db.Sequelize.Op.like]: "%rejected%",
+        },
+      },
+    });
+
+    expect(rejectedNotification).toBeTruthy();
+
+    // ==========================================
+    // VALIDATION TESTS
+    // ==========================================
+
+    const validationModerationLog = await db.ModerationLog.create({
+      adminId: admin.id,
+      targetUserId: testUser.id,
+      targetType: "user",
+      targetId: testUser.id,
+      action: "ban_user",
+      reason: "Testing appeal validation.",
+    });
+
+    result = await api(userToken, "POST", "/api/moderation-appeals", {
+      moderationLogId: validationModerationLog.id,
+      explanation: "Testing validation errors.",
+    });
+
+    expect(result.status).toBe(201);
+
+    const validationAppeal = result.data.appeal;
+
+    // Invalid review status.
+    result = await api(
+      adminToken,
+      "PATCH",
+      `/api/admin/appeals/${validationAppeal.id}/review`,
+      {
+        status: "invalid",
+        adminResponse: "Testing invalid status.",
+      },
+    );
+
+    expect(result.status).toBe(400);
+
+    // Empty admin response.
+    result = await api(
+      adminToken,
+      "PATCH",
+      `/api/admin/appeals/${validationAppeal.id}/review`,
+      {
+        status: "accepted",
+        adminResponse: "   ",
+      },
+    );
+
+    expect(result.status).toBe(400);
+
+    // Invalid appeal ID.
+    result = await api(
+      adminToken,
+      "PATCH",
+      "/api/admin/appeals/invalid/review",
+      {
+        status: "accepted",
+        adminResponse: "Testing invalid appeal ID.",
+      },
+    );
+
+    expect(result.status).toBe(400);
+
+    // Nonexistent appeal ID.
+    result = await api(
+      adminToken,
+      "PATCH",
+      "/api/admin/appeals/999999999/review",
+      {
+        status: "accepted",
+        adminResponse: "Testing nonexistent appeal.",
+      },
+    );
+
+    expect(result.status).toBe(404);
   });
 });

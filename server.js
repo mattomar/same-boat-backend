@@ -19,6 +19,7 @@ const authenticateToken = require("./middlewares/auth");
 const blockRoutes = require("./routes/blockRoute");
 const adminRoutes = require("./routes/adminRoutes")
 const reportRoutes = require("./routes/reportRoutes");
+const moderationAppealRoutes = require("./routes/moderationAppealRoutes");
 
 const db = require("./models"); // ✅ import models
 
@@ -51,6 +52,7 @@ app.use("/api/messages", messageRoutes);
 app.use("/api/blocks", blockRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/moderation-appeals", moderationAppealRoutes);
 
 app.get("/protected", authenticateToken, (req, res) => {
   res.json({ user: req.user });

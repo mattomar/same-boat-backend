@@ -28,12 +28,16 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    // BLOCK BANNED USERS
-    if (user.isBanned) {
+    // Banned users can only access moderation appeal endpoints.
+    const isAppealRoute = req.originalUrl
+      .split("?")[0]
+      .startsWith("/api/moderation-appeals");
+
+    if (user.isBanned && !isAppealRoute) {
       return res.status(403).json({
         error: "Your account has been banned",
         banned: true,
-        reason: user.banReason,
+        reason: user.banReason || null,
       });
     }
 
